@@ -1,5 +1,3 @@
-from . import population
-from . import reproduction
+from . import neat
 
-random_population = population.random_population
-propagate = reproduction.propagate
+Neat = neat.Neat
