@@ -2,15 +2,83 @@ import numpy as np
 import taichi as ti
 
 from . import activation_funcs
+from . import population
 from .data_types import Node, NodeKinds
 
 MUTATION_RATE = 0.01
 CROSSOVER_RATE = 0.6
 
 # Constants for testing compatibility between two individuals in a Population.
+# TODO: Tune these!
 DISJOINT_COEFF = 1.0
 WEIGHT_COEFF = 1.0
 COMPATIBILITY_THRESHOLD = 1.0
+
+@ti.data_oriented
+class Matches:
+    """Data structure for tracking parent / mate pairs and their link lists."""
+
+    NONE = -1
+
+    def __init__(self, num_individuals):
+        self.selections = ti.Vector.field(
+            n=2, dtype=int, shape=num_individuals)
+        self.mate_links = ti.field(
+            int, shape=(num_individuals, population.MAX_NETWORK_SIZE))
+
+    @ti.kernel
+    def update_mate_links(self, pop: ti.template()):
+        for i in range(pop.num_individuals):
+            p, m = self.selections[i]
+            for pl in range(pop.links[p].length()):
+                p_innov = pop.links[p, pl].innov
+                for ml in range(pop.links[m].length()):
+                    m_innov = pop.links[m, ml].innov
+                    if (p_innov == m_innov):
+                        self.mate_links[p, pl] = ml
+
+    def update(self, pop, parent_selections, mate_selections):
+        self.selections.from_numpy(
+            np.stack((parent_selections, mate_selections), axis=1
+                    ).astype(np.int32))
+        self.mate_links.fill(self.NONE)
+        self.update_mate_links(pop)
+
+    @ti.func
+    def is_compatible(self, input_pop, i):
+        """Returns True iff parent and mate are similar enough to breed."""
+        num_disjoint = 0
+        num_total = 0
+        weight_delta = 0.0
+
+        p, m = self.selections[i]
+        for pl in range(input_pop.links[p].length()):
+            ml = self.mate_links[p, pl]
+            # If both parent and mate have this link, compare their weights.
+            if (pl != self.NONE and ml != self.NONE):
+                num_total += 1
+                weight_delta += ti.abs(
+                    input_pop.links[p, pl].weight -
+                    input_pop.links[m, ml].weight)
+
+            # If just one of parent and mate have this link, it's "disjoint." The
+            # original Neat algorithm discriminates between "disjoint" and "excess"
+            # genes, but here we treat them all the same.
+            elif (pl != self.NONE or ml != self.NONE):
+                num_total += 1
+                num_disjoint += 1
+
+        return ((DISJOINT_COEFF * num_disjoint / num_total) +
+                (WEIGHT_COEFF * weight_delta)) < COMPATIBILITY_THRESHOLD
+
+    @ti.func
+    def should_crossover(self, input_pop, i):
+        p, m = self.selections[i]
+        result = False
+        if p != m and ti.random() < CROSSOVER_RATE:
+            result = self.is_compatible(input_pop, i)
+        return result
+
 
 @ti.func
 def add_random_link(pop, i):
@@ -23,6 +91,10 @@ def add_random_link(pop, i):
     pop.new_link(i, from_node, to_node, ti.random())
 
 
+# TODO: Optimize? This is inherently inefficient, since different threads are
+# doing completely different work, but it may be possible to speed up by
+# reducing the length of the longest branch or by reorienting the computation
+# so we apply the same mutation to many genes at once.
 @ti.func
 def mutate_one(pop, i):
     mutation_kind = ti.random(dtype=int) % 7
@@ -80,139 +152,49 @@ def mutate_one(pop, i):
         else:
             add_random_link(pop, i)
 
+@ti.func
+def crossover(input_pop, output_pop, i, matches):
+    # Propagate nodes from the parent to its clone in output_pop.
+    for n in range(input_pop.nodes[i].length()):
+        output_pop.nodes[i].append(input_pop.nodes[i, n])
 
-@ti.data_oriented
-class Couplings:
-    PARENT = 0
-    MATE = 1
-    NONE = -1
+    p, m = matches.selections[i]
+    for pl in range(input_pop.links[p].length()):
+        ml = matches.mate_links[p, pl]
+        # If parent doesn't have this link, don't include it (in other words,
+        # disjoint and excess genes always come from parent, not mate).
+        if pl != Matches.NONE:
+            # If parent and mate both have this link, pick one at random.
+            # Otherwise, just use the parent's copy.
+            if ml != Matches.NONE and ti.random(dtype=int) % 2:
+                output_pop.links[i].append(input_pop.links[m, ml])
+            else:
+                output_pop.links[i].append(input_pop.links[p, pl])
 
-    def __init__(self, pop, parent_selections, mate_selections):
-        self.pop = pop
-        self.max_innov = pop.innovation_counter[None]
+@ti.func
+def clone(input_pop, output_pop, i, matches):
+    p, _ = matches.selections[i]
+    # Propagate nodes from this individual to its clone in output_pop.
+    for n in range(input_pop.nodes[i].length()):
+        output_pop.nodes[i].append(input_pop.nodes[p, n])
 
-        # Allocate a workspace for alligning link lists by innovation numbers.
-        self.selections = ti.Vector.field(
-            n=2, dtype=int, shape=pop.num_individuals)
-        self.selections.from_numpy(
-            np.stack((parent_selections, mate_selections), axis=1
-                    ).astype(np.int32))
+    # Propagate links from this individual to its clone in output_pop.
+    for l in range(input_pop.links[i].length()):
+        if not input_pop.links[i, l].deleted:
+            input_link = input_pop.links[p, l]
+            output_pop.links[i].append(input_link)
 
-        # TODO: Optimize?
-        self.innov2l = ti.Vector.field(
-            n=2, dtype=int, shape=(pop.num_individuals, self.max_innov + 1))
-        self.innov2l.fill(self.NONE)
-
-    @ti.func
-    def align_link_lists(self, i):
-        p, m = self.couple_indices(i)
-        for l in range(self.pop.links[p].length()):
-            innov = self.pop.links[p, l].innov
-            self.innov2l[innov, self.PARENT] = l
-        for l in range(self.pop.links[m].length()):
-            innov = self.pop.links[m, l].innov
-            self.innov2l[innov, self.MATE] = l
-
-    @ti.func
-    def is_compatible(self, i):
-        """Returns True iff parent and mate are similar enough to breed."""
-        num_disjoint = 0
-        num_total = 0
-        weight_delta = 0.0
-
-        # Traverse links in order of innovation number
-        for v in range(self.max_innov):
-            pl, ml = self.link_indices(i, v)
-            # If both parent and mate have this link, compare their weights.
-            if (pl != self.NONE and ml != self.NONE):
-                p, m = self.couple_indices(i)
-                num_total += 1
-                weight_delta += ti.abs(
-                    self.pop.links[p, pl].weight -
-                    self.pop.links[m, ml].weight)
-
-            # If just one of parent and mate have this link, it's "disjoint." The
-            # original Neat algorithm discriminates between "disjoint" and "excess"
-            # genes, but here we treat them all the same.
-            elif (pl != self.NONE or ml != self.NONE):
-                num_total += 1
-                num_disjoint += 1
-
-        return ((DISJOINT_COEFF * num_disjoint / num_total) +
-                (WEIGHT_COEFF * weight_delta)) < COMPATIBILITY_THRESHOLD
-
-    @ti.func
-    def should_crossover(self, i):
-        p, m = self.couple_indices(i)
-        result = False
-        if p != m and ti.random() < CROSSOVER_RATE:
-            self.align_link_lists(i)
-            result = self.is_compatible(i)
-        return result
-
-    @ti.func
-    def link_indices(self, i, v):
-        return self.innov2l[i, v].cast(int)
-
-    @ti.func
-    def couple_indices(self, i):
-        return self.selections[i].cast(int)
-
-    @ti.func
-    def crossover(self, output_pop, i):
-        # Propagate nodes from the parent to its clone in output_pop.
-        for n in range(self.pop.nodes[i].length()):
-            output_pop.nodes[i].append(self.pop.nodes[i, n])
-
-        # Traverse links from parent and mate, aligned by innovation number.
-        for v in range(self.max_innov):
-            pl, ml = self.link_indices(i, v)
-            # If parent doesn't have this link, don't include it (in other words,
-            # disjoint and excess genes always come from parent, not mate).
-            if pl != Couplings.NONE:
-                p, m = self.couple_indices(i)
-                # If parent and mate both have this link, pick one at random.
-                # Otherwise, just use the parent's copy.
-                if ml != Couplings.NONE and ti.random(dtype=int) % 2:
-                    output_pop.links[i].append(self.pop.links[m, ml])
-                else:
-                    output_pop.links[i].append(self.pop.links[p, pl])
-
-    @ti.func
-    def clone(self, output_pop, i):
-        p, _ = self.couple_indices(i)
-        # Propagate nodes from this individual to its clone in output_pop.
-        for n in range(self.pop.nodes[i].length()):
-            output_pop.nodes[i].append(self.pop.nodes[p, n])
-
-        # Propagate links from this individual to its clone in output_pop.
-        for l in range(self.pop.links[i].length()):
-            if not self.pop.links[i, l].deleted:
-                input_link = self.pop.links[p, l]
-                output_pop.links[i].append(input_link)
-
-    @ti.func
-    def make_offspring(self, output_pop, i):
+@ti.kernel
+def propagate(input_pop:ti.template(), output_pop: ti.template(),
+              matches: ti.template()):
+    for i in range(output_pop.num_individuals):
         # If this couple is compatible and chance is on their side, perform
         # crossover.
-        if self.should_crossover(i):
-            self.crossover(output_pop, i)
+        if matches.should_crossover(input_pop, i):
+            crossover(input_pop, output_pop, i, matches)
         # Otherwise, just make a clone of the one parent.
         else:
-            self.clone(output_pop, i)
+            clone(input_pop, output_pop, i, matches)
 
         # Finally, mutate the offspring.
         mutate_one(output_pop, i)
-
-    @ti.kernel
-    def propagate(self, output_pop: ti.template()):
-        for i in range(output_pop.num_individuals):
-            self.make_offspring(output_pop, i)
-
-
-def propagate(input_pop, parent_selections, mate_selections):
-    output_pop = input_pop.clone_without_network()
-    couplings = Couplings(input_pop, parent_selections, mate_selections)
-    couplings.propagate(output_pop)
-    return output_pop
-

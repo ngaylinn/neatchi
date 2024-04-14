@@ -2,7 +2,6 @@ import numpy as np
 import taichi as ti
 
 from . import activation_funcs
-from . import reproduction
 from .data_types import Link, Node, NodeKinds
 
 # Max sizes used to construct efficient lookup tables in reproduction.py
@@ -42,6 +41,12 @@ class Population:
         result.innovation_counter = self.innovation_counter
         return result
 
+    @ti.kernel
+    def clear(self):
+        for i in range(self.num_individuals):
+            self.nodes[ti.cast(i, int)].deactivate()
+            self.links[ti.cast(i, int)].deactivate()
+
     @ti.func
     def has_room_for(self, i, nodes, links):
         return (self.nodes[i].length() + nodes < MAX_NETWORK_SIZE and
@@ -58,8 +63,8 @@ class Population:
     @ti.kernel
     def randomize_all(self):
         for i in range(self.num_individuals):
-            self.links[i].deactivate()
-            self.nodes[i].deactivate()
+            self.links[ti.cast(i, int)].deactivate()
+            self.nodes[ti.cast(i, int)].deactivate()
             for _ in range(self.num_inputs):
                 self.nodes[i].append(
                     Node(NodeKinds.INPUT.value,
@@ -94,15 +99,14 @@ class Population:
                         value = self.nodes[i, link.from_node].prev_act
                         weight = link.weight
                         raw += value * weight
-                next_act = activation_funcs.call(
+                self.nodes[i, n].curr_act = activation_funcs.call(
                     self.nodes[i, n].act_func,
                     raw + self.nodes[i, n].bias)
-                self.nodes[i, n].curr_act = next_act
 
         # Return a vector of the activation values for just the output nodes.
         return ti.Vector([
-            self.nodes[i, n].curr_act for n in range(
-                self.num_inputs, self.num_inputs + self.num_outputs)])
+            ti.math.clamp(self.nodes[i, n].curr_act, 0.0, 1.0)
+            for n in range(self.num_inputs, self.num_inputs + self.num_outputs)])
 
     @ti.kernel
     def activate_all(self, inputs: ti.template(), outputs: ti.template()):
@@ -110,29 +114,64 @@ class Population:
             w = i * self.num_repeats + r
             outputs[w] = self.activate_one(i, inputs[w])
 
+    # This is the activation function for the render* functions, which doesn't
+    # use the node activation states, since those would get clobbered when
+    # doing many parallel calls for the same individual.
+    # TODO: This still has the structure of the recurrent activation function,
+    # but it's being used in a non-recurrent way, which isn't right. Add
+    # support for non-recurrent networks.
     @ti.func
-    def render_one_helper(self, w, i, outputs):
-        _, rows, cols = outputs.shape
+    def activate_one_r(self, i, inputs):
+        result = ti.Vector([0.0] * self.num_outputs)
+
+        # Compute activations for non-input nodes
+        for n in range(self.nodes[i].length()):
+            if not self.nodes[i, n].deleted:
+                raw = 0.0
+                for l in range(self.links[i].length()):
+                    link = self.links[i, l]
+                    if not link.deleted and link.to_node == n:
+                        value = ti.select(
+                            link.from_node < self.num_inputs,
+                            inputs[link.from_node], 0.0)
+                        weight = link.weight
+                        raw += value * weight
+                if n >= self.num_inputs and n < self.num_inputs + self.num_outputs:
+                    result[n - self.num_inputs] = activation_funcs.call(
+                        self.nodes[i, n].act_func,
+                        raw + self.nodes[i, n].bias)
+        return ti.math.clamp(result, 0.0, 1.0)
+
+    @ti.kernel
+    def render_one_kernel(self, i: int, output: ti.template()):
+        rows, cols = output.shape
         for row, col in ti.ndrange(rows, cols):
             inputs = ti.Vector([row / rows, col / cols])
             # TODO: Handle outputs of varying sizes, not just 1.
-            outputs[w, row, col] = self.activate_one(i, inputs)[0]
-
-    @ti.kernel
-    def render_one_kernel(self, w: int, i: int, outputs: ti.template()):
-        self.render_one_helper(w, i, outputs)
+            output[row, col] = self.activate_one_r(i, inputs)[0]
 
     def render_one(self, index, shape):
-        shape = (1,) + shape
         result = ti.field(float, shape=shape)
-        self.render_one_kernel(index, index, result)
-        return result.to_numpy()[0]
+        self.render_one_kernel(index, result)
+        return result.to_numpy()
 
     @ti.kernel
-    def render_all(self, outputs: ti.template()):
-        for i, r in ti.ndrange(self.num_individuals, self.num_repeats):
+    def render_all_kernel(self, outputs: ti.template()):
+        n_i, n_r = self.num_individuals, self.num_repeats
+        _, rows, cols = outputs.shape
+        # TODO: This vastly improves performance on GPU, but also results in
+        # rendering artifacts. Seems there's an order dependency? Probably this
+        # lies in the activation state, which shouldn't be tracked when
+        # rendering, I think.
+        for i, r, row, col in ti.ndrange(n_i, n_r, rows, cols):
             w = i * self.num_repeats + r
-            self.render_one_helper(w, i, outputs)
+            inputs = ti.Vector([row / rows, col / cols])
+            # TODO: Handle outputs of varying sizes, not just 1.
+            outputs[w, row, col] = self.activate_one_r(i, inputs)[0]
+
+    # TODO: Remove? Only here for clearer profile output.
+    def render_all(self, outputs):
+        self.render_all_kernel(outputs)
 
 def random_population(num_inputs, num_outputs, num_individuals, num_repeats):
     result = Population(num_inputs, num_outputs, num_individuals, num_repeats)
