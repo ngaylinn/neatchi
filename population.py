@@ -58,7 +58,6 @@ class Population:
         link = Link(from_node, to_node, weight)
         link.innov = ti.atomic_add(self.innovation_counter[None], 1)
         self.links[i].append(link)
-        
 
     @ti.kernel
     def randomize_all(self):
