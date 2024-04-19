@@ -107,43 +107,41 @@ def activate_cube(raw):
     return raw ** 3
 
 
-@ti.func
-def call(act_func, raw):
-    result = 0.0
-    if act_func == 0:
-        result = activate_sigmoid(raw)
-    elif act_func == 1:
-        result = activate_tanh(raw)
-    elif act_func == 2:
-        result = activate_sin(raw)
-    elif act_func == 3:
-        result = activate_gaus(raw)
-    elif act_func == 4:
-        result = activate_relu(raw)
-    elif act_func == 5:
-        result = activate_elu(raw)
-    elif act_func == 6:
-        result = activate_lelu(raw)
-    elif act_func == 7:
-        result = activate_selu(raw)
-    elif act_func == 8:
-        result = activate_softplus(raw)
-    elif act_func == 9:
-        result = activate_identity(raw)
-    elif act_func == 10:
-        result = activate_clamped(raw)
-    elif act_func == 11:
-        result = activate_inv(raw)
-    elif act_func == 12:
-        result = activate_log(raw)
-    elif act_func == 13:
-        result = activate_exp(raw)
-    elif act_func == 14:
-        result = activate_abs(raw)
-    elif act_func == 15:
-        result = activate_hat(raw)
-    elif act_func == 16:
-        result = activate_square(raw)
-    elif act_func == 17:
-        result = activate_cube(raw)
-    return result
+@ti.real_func
+def call(act_func: int, raw: float) -> float:
+    if act_func == ActivationFuncs.SIGMOID.value:
+        return activate_sigmoid(raw)
+    if act_func == ActivationFuncs.TANH.value:
+        return activate_tanh(raw)
+    if act_func == ActivationFuncs.SIN.value:
+        return activate_sin(raw)
+    if act_func == ActivationFuncs.GAUS.value:
+        return activate_gaus(raw)
+    if act_func == ActivationFuncs.RELU.value:
+        return activate_relu(raw)
+    if act_func == ActivationFuncs.ELU.value:
+        return activate_elu(raw)
+    if act_func == ActivationFuncs.LELU.value:
+        return activate_lelu(raw)
+    if act_func == ActivationFuncs.SELU.value:
+        return activate_selu(raw)
+    if act_func == ActivationFuncs.SOFTPLUS.value:
+        return activate_softplus(raw)
+    if act_func == ActivationFuncs.IDENTITY.value:
+        return activate_identity(raw)
+    if act_func == ActivationFuncs.CLAMPED.value:
+        return activate_clamped(raw)
+    if act_func == ActivationFuncs.INV.value:
+        return activate_inv(raw)
+    if act_func == ActivationFuncs.LOG.value:
+        return activate_log(raw)
+    if act_func == ActivationFuncs.EXP.value:
+        return activate_exp(raw)
+    if act_func == ActivationFuncs.ABS.value:
+        return activate_abs(raw)
+    if act_func == ActivationFuncs.HAT.value:
+        return activate_hat(raw)
+    if act_func == ActivationFuncs.SQUARE.value:
+        return activate_square(raw)
+    if act_func == ActivationFuncs.CUBE.value:
+        return activate_cube(raw)

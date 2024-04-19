@@ -152,11 +152,12 @@ def mutate_one(pop, i):
 
 @ti.func
 def crossover(input_pop, output_pop, i, matches):
-    # Propagate nodes from the parent to its clone in output_pop.
-    for n in range(input_pop.nodes[i].length()):
-        output_pop.nodes[i].append(input_pop.nodes[i, n])
-
     p, m = matches.selections[i]
+
+    # Propagate nodes from the parent to its clone in output_pop.
+    for n in range(input_pop.nodes[p].length()):
+        output_pop.nodes[i].append(input_pop.nodes[p, n])
+
     for pl in range(input_pop.links[p].length()):
         ml = matches.mate_links[p, pl]
         # If parent doesn't have this link, don't include it (in other words,
@@ -172,14 +173,15 @@ def crossover(input_pop, output_pop, i, matches):
 @ti.func
 def clone(input_pop, output_pop, i, matches):
     p, _ = matches.selections[i]
+
     # Propagate nodes from this individual to its clone in output_pop.
-    for n in range(input_pop.nodes[i].length()):
+    for n in range(input_pop.nodes[p].length()):
         output_pop.nodes[i].append(input_pop.nodes[p, n])
 
     # Propagate links from this individual to its clone in output_pop.
-    for l in range(input_pop.links[i].length()):
-        if not input_pop.links[i, l].deleted:
-            input_link = input_pop.links[p, l]
+    for l in range(input_pop.links[p].length()):
+        input_link = input_pop.links[p, l]
+        if not input_link.deleted:
             output_pop.links[i].append(input_link)
 
 @ti.kernel
