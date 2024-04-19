@@ -22,8 +22,6 @@ class Node:
     act_func: int
     bias: float  # TODO: Do we need bias? Do we also want gain?
     deleted: bool
-    prev_act: float
-    curr_act: float
 
 
 def node_to_str(node):

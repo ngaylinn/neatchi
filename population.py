@@ -11,6 +11,72 @@ from .data_types import Link, Node, NodeKinds
 MAX_NETWORK_SIZE = 2**8
 MAX_INNOVATIONS = 2**16
 
+@ti.kernel
+def copy_one(input_pop: ti.template(), i: int,
+             output_pop: ti.template(), o: int):
+    for n in range(input_pop.nodes[i].length()):
+        output_pop.nodes[o].append(input_pop.nodes[i, n])
+    for l in range(input_pop.links[i].length()):
+        output_pop.links[o].append(input_pop.links[i, l])
+
+@ti.data_oriented
+class Controllers:
+    def __init__(self, world_assignments, num_activations, pop, i=None):
+        if i is None:
+            self.pop = pop
+        else:
+            self.pop = Population(pop.num_inputs, pop.num_outputs, 1, 1)
+            copy_one(pop, i, self.pop, 0)
+
+        self.world_assignments = ti.field(int, shape=self.pop.num_worlds)
+        self.world_assignments.from_numpy(world_assignments)
+        self.num_activations = num_activations
+        self.prev_act = ti.field(
+            float,
+            shape=(self.pop.num_worlds, num_activations, MAX_NETWORK_SIZE))
+        self.curr_act = ti.field(
+            float,
+            shape=(self.pop.num_worlds, num_activations, MAX_NETWORK_SIZE))
+
+    @ti.func
+    def activate(self, inputs, w, a):
+        i = self.world_assignments[w]
+
+        num_nodes = self.pop.nodes[i].length()
+        num_links = self.pop.links[i].length()
+
+        # Populate input node activations
+        for n in range(self.pop.num_inputs):
+            self.prev_act[w, a, n] = inputs[n]
+
+        # Preserve previous activations before computing the next round.
+        # TODO: It'd be faster to swap buffer pointers than to copy.
+        for n in range(self.pop.num_inputs, num_nodes):
+            self.prev_act[w, a, n] = self.curr_act[w, a, n]
+
+        # Compute activations for non-input nodes
+        for n in range(self.pop.num_inputs, num_nodes):
+            node = self.pop.nodes[i, n]
+            if not node.deleted:
+                raw = 0.0
+                for l in range(num_links):
+                    link = self.pop.links[i, l]
+                    if not link.deleted and link.to_node == n:
+                        value = self.prev_act[w, a, link.from_node]
+                        weight = link.weight
+                        raw += value * weight
+                self.curr_act[w, a, n] = activation_funcs.call(
+                    node.act_func, raw + node.bias)
+
+        # Return a vector of the activation values for just the output nodes.
+        return ti.Vector([
+            ti.math.clamp(self.curr_act[w, a, n], 0.0, 1.0)
+            for n in range(self.pop.num_inputs,
+                           self.pop.num_inputs + self.pop.num_outputs)])
+
+    def get_one(self, i):
+        return Controllers(np.zeros(1), self.num_activations, self.pop, i)
+
 
 @ti.data_oriented
 class Population:
@@ -21,13 +87,11 @@ class Population:
         self.num_repeats = num_repeats
         self.num_worlds = num_individuals * num_repeats
 
-        # TODO: Tune sizes?
         node_lists = ti.root.dense(ti.i, self.num_individuals) \
                 .dynamic(ti.j, MAX_NETWORK_SIZE, chunk_size=32)
         self.nodes = Node.field()
         node_lists.place(self.nodes)
 
-        # TODO: Tune sizes?
         link_lists = ti.root.dense(ti.i, self.num_individuals) \
                 .dynamic(ti.j, MAX_NETWORK_SIZE, chunk_size=32)
         self.links = Link.field()
@@ -35,11 +99,8 @@ class Population:
 
         self.innovation_counter = ti.field(dtype=int, shape=())
 
-    def clone_without_network(self):
-        result = Population(self.num_inputs, self.num_outputs,
-                            self.num_individuals, self.num_repeats)
-        result.innovation_counter = self.innovation_counter
-        return result
+    def get_controllers(self, world_assignments, num_activations):
+        return Controllers(world_assignments, num_activations, self)
 
     @ti.kernel
     def clear(self):
@@ -73,46 +134,6 @@ class Population:
                     Node(NodeKinds.OUTPUT.value,
                          activation_funcs.random()))
 
-    # TODO: combine this with the activation functions?
-    @ti.func
-    def activate_one(self, i, inputs):
-        num_nodes = self.nodes[i].length()
-        num_links = self.links[i].length()
-
-        # Populate input node activations
-        for n in range(self.num_inputs):
-            self.nodes[i, n].prev_act = inputs[n]
-
-        # Preserve previous activations before computing the next round.
-        # TODO: It'd be faster to swap buffer pointers than to copy.
-        for n in range(self.num_inputs, num_nodes):
-            self.nodes[i, n].prev_act = self.nodes[i, n].curr_act
-
-        # Compute activations for non-input nodes
-        for n in range(self.num_inputs, num_nodes):
-            if not self.nodes[i, n].deleted:
-                raw = 0.0
-                for l in range(num_links):
-                    link = self.links[i, l]
-                    if not link.deleted and link.to_node == n:
-                        value = self.nodes[i, link.from_node].prev_act
-                        weight = link.weight
-                        raw += value * weight
-                self.nodes[i, n].curr_act = activation_funcs.call(
-                    self.nodes[i, n].act_func,
-                    raw + self.nodes[i, n].bias)
-
-        # Return a vector of the activation values for just the output nodes.
-        return ti.Vector([
-            ti.math.clamp(self.nodes[i, n].curr_act, 0.0, 1.0)
-            for n in range(self.num_inputs, self.num_inputs + self.num_outputs)])
-
-    @ti.kernel
-    def activate_all(self, inputs: ti.template(), outputs: ti.template()):
-        for i, r in ti.ndrange(self.num_individuals, self.num_repeats):
-            w = i * self.num_repeats + r
-            outputs[w] = self.activate_one(i, inputs[w])
-
     # This is the activation function for the render* functions, which doesn't
     # use the node activation states, since those would get clobbered when
     # doing many parallel calls for the same individual.
@@ -129,12 +150,9 @@ class Population:
                 raw = 0.0
                 for l in range(self.links[i].length()):
                     link = self.links[i, l]
-                    if not link.deleted and link.to_node == n:
-                        value = ti.select(
-                            link.from_node < self.num_inputs,
-                            inputs[link.from_node], 0.0)
-                        weight = link.weight
-                        raw += value * weight
+                    if (not link.deleted and link.to_node == n and
+                        link.from_node < self.num_inputs):
+                        raw += link.weight * inputs[link.from_node]
                 if n >= self.num_inputs and n < self.num_inputs + self.num_outputs:
                     result[n - self.num_inputs] = activation_funcs.call(
                         self.nodes[i, n].act_func,
@@ -158,11 +176,14 @@ class Population:
     def render_all_kernel(self, outputs: ti.template()):
         n_i, n_r = self.num_individuals, self.num_repeats
         _, rows, cols = outputs.shape
-        for i, r, row, col in ti.ndrange(n_i, n_r, rows, cols):
-            w = i * self.num_repeats + r
-            inputs = ti.Vector([row / rows, col / cols])
-            # TODO: Handle outputs of varying sizes, not just 1.
-            outputs[w, row, col] = self.activate_one_r(i, inputs)[0]
+        # It's important to include at least one of row and col in the outer
+        # loop for performance reasons, but both would take too much memory.
+        for i, r, row in ti.ndrange(n_i, n_r, rows):
+            for col in range(cols):
+                w = i * self.num_repeats + r
+                inputs = ti.Vector([row / rows, col / cols])
+                # TODO: Handle outputs of varying sizes, not just 1.
+                outputs[w, row, col] = self.activate_one_r(i, inputs)[0]
 
     # TODO: Remove? Only here for clearer profile output.
     def render_all(self, outputs):

@@ -37,10 +37,8 @@ class Matches:
                     if (p_innov == m_innov):
                         self.mate_links[p, pl] = ml
 
-    def update(self, pop, parent_selections, mate_selections):
-        self.selections.from_numpy(
-            np.stack((parent_selections, mate_selections), axis=1
-                    ).astype(np.int32))
+    def update(self, pop, selections):
+        self.selections.from_numpy(selections)
         self.mate_links.fill(self.NONE)
         self.update_mate_links(pop)
 
