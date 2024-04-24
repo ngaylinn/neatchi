@@ -68,6 +68,18 @@ class NeatPopulation:
     def size_of(self, i: int) -> ti.types.vector(2, int):
         return ti.Vector([self.nodes[i].length(), self.links[i].length()])
 
+    @ti.kernel
+    def copy_one(self, i: int, other: ti.template(), o: int):
+        for n in range(self.nodes[i].length()):
+            other.nodes[o].append(self.nodes[i, n])
+        for l in range(self.links[i].length()):
+            other.links[o].append(self.links[i, l])
+
+    def get_one(self, i):
+        pop = NeatPopulation(self.num_inputs, self.num_outputs, 1)
+        self.copy_one(i, pop, 0)
+        return pop
+
     def print_one(self, i):
         def print_edge(num_cells, top):
             print('┏' if top else '┗', end='')

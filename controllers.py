@@ -2,15 +2,7 @@ import numpy as np
 import taichi as ti
 
 from . import activation_funcs
-from .population import MAX_NETWORK_SIZE
-
-@ti.kernel
-def copy_one(input_pop: ti.template(), i: int,
-             output_pop: ti.template(), o: int):
-    for n in range(input_pop.nodes[i].length()):
-        output_pop.nodes[o].append(input_pop.nodes[i, n])
-    for l in range(input_pop.links[i].length()):
-        output_pop.links[o].append(input_pop.links[i, l])
+from .population import MAX_NETWORK_SIZE, NeatPopulation
 
 
 @ti.data_oriented
@@ -67,7 +59,7 @@ class NeatControllers:
 
     def get_one(self, i):
         result = NeatControllers(1, self.num_activations)
-        result.update(self.pop, np.array([i]))
+        result.update(self.pop.get_one(i), np.array([0]))
         return result
 
 
