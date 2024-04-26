@@ -1,9 +1,12 @@
-import numpy as np
 import taichi as ti
 
 from . import activation_funcs
 from .population import MAX_NETWORK_SIZE
 
+# TODO: Something is very wrong with this function. Not only is it failing to
+# access link weight values from pop, it seems to hold a reference to pop and
+# prevent it from ever being deallocated! Perhaps if I rewrite this in a
+# non-recursive way and make it a @ti.func this will go away.
 @ti.real_func
 def activate_neuron(pop: ti.template(), i: int, n: int,
                     act: ti.template(), w: int, r: int) -> float:
@@ -43,12 +46,54 @@ def activate_network(inputs, pop, i, act, w, r):
     return ti.math.clamp(
         activate_neuron(pop, i, pop.num_inputs, act, w, r), 0.0, 1.0)
 
+
+# TODO: This doesn't work yet. It doesn't handle recurrent networks!
+#@ti.func
+#def activate_network(inputs, pop, i, act, w, r):
+#    # Initialize activations for all nodes.
+#    for n in range(pop.nodes[i].length()):
+#        # Input nodes get activation values taken from the inputs argument.
+#        if n < pop.num_inputs:
+#            act[w, r, n] = inputs[n]
+#        # Other nodes get a nan value to indicate they haven't activated.
+#        else:
+#            act[w, r, n] = ti.math.nan
+#
+#    # TODO: Optimize!
+#    # TODO: Support more than one channel in the output.
+#    # Repeat until the output neuron has been activated
+#    while ti.math.isnan(act[w, r, pop.num_inputs]):
+#        # Visit every node in the network.
+#        for n in range(pop.nodes[i].length()):
+#            # If this node hasn't activated yet...
+#            if ti.math.isnan(act[w, r, n]):
+#                raw = 0.0
+#                # Visit all incoming links and sum up input values.
+#                for l in range(pop.links[i].length()):
+#                    link = pop.links[i, l]
+#                    if not link.deleted and link.to_node == n:
+#                        raw += link.weight * act[w, r, link.from_node]
+#                # If one of this node's inputs has not yet activated, then raw
+#                # will have a nan value, and this neuron can't activate yet.
+#                if not ti.math.isnan(raw):
+#                    node = pop.nodes[i, n]
+#                    act[w, r, n] = activation_funcs.call(
+#                        node.act_func, raw + node.bias)
+#
+#    # Return the calculated activation value for the output neuron.
+#    return ti.math.clamp(act[w, r, pop.num_inputs], 0.0, 1.0)
+
+
 @ti.data_oriented
 class NeatRenderers:
     def __init__(self, num_worlds, num_rows):
+        print(f'A NeatRenderers {id(self)}')
         self.world_assignments = ti.field(int, shape=num_worlds)
         self.act = ti.field(
             float, shape=(num_worlds, num_rows, MAX_NETWORK_SIZE))
+
+    def __del__(self):
+        print(f'D NeatRenderers {id(self)}')
 
     def update(self, pop, world_assignments):
         self.pop = pop

@@ -8,6 +8,7 @@ from .population import MAX_NETWORK_SIZE, NeatPopulation
 @ti.data_oriented
 class NeatControllers:
     def __init__(self, num_worlds, num_activations):
+        print(f'A NeatControllers {id(self)}')
         self.num_activations = num_activations
         self.world_assignments = ti.field(int, shape=num_worlds)
         self.prev_act = ti.field(
@@ -16,6 +17,9 @@ class NeatControllers:
         self.curr_act = ti.field(
             float,
             shape=(num_worlds, num_activations, MAX_NETWORK_SIZE))
+
+    def __del__(self):
+        print(f'D NeatControllers {id(self)}')
 
     def update(self, pop, world_assignments):
         self.pop = pop
@@ -59,7 +63,7 @@ class NeatControllers:
 
     def get_one(self, i):
         result = NeatControllers(1, self.num_activations)
-        result.update(self.pop.get_one(i), np.array([0]))
+        result.update(self.pop.get_one(i), np.array([0], dtype=np.int32))
         return result
 
 

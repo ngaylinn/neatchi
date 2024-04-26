@@ -1,4 +1,3 @@
-import numpy as np
 import taichi as ti
 
 from . import activation_funcs
@@ -15,6 +14,7 @@ MAX_INNOVATIONS = 2**16
 @ti.data_oriented
 class NeatPopulation:
     def __init__(self, num_inputs, num_outputs, num_individuals):
+        print(f'A NeatPopulation {id(self)}')
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
         self.num_individuals = num_individuals
@@ -31,6 +31,9 @@ class NeatPopulation:
 
         # TODO: Share one across all populations?
         self.innovation_counter = ti.field(dtype=int, shape=())
+
+    def __del__(self):
+        print(f'D NeatPopulation {id(self)}')
 
     @ti.kernel
     def clear(self):

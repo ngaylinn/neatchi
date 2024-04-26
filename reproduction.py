@@ -1,4 +1,3 @@
-import numpy as np
 import taichi as ti
 
 from . import activation_funcs
@@ -21,10 +20,14 @@ class Matches:
     NONE = -1
 
     def __init__(self, num_individuals):
+        print(f'A Matches {id(self)}')
         self.selections = ti.Vector.field(
             n=2, dtype=int, shape=num_individuals)
         self.mate_links = ti.field(
             int, shape=(num_individuals, population.MAX_NETWORK_SIZE))
+
+    def __del__(self):
+        print(f'D Matches {id(self)}')
 
     @ti.kernel
     def update_mate_links(self, pop: ti.template()):

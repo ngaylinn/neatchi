@@ -9,6 +9,7 @@ from . import reproduction
 class Neat:
     """Data allocations for running Neat on a population with given specs."""
     def __init__(self, num_inputs, num_outputs, num_individuals):
+        print(f'A Neat {id(self)}')
         # Taichi doesn't handle lots of memory allocations / deallocations very
         # well, so allocate all memory we need to breed this population up
         # front, including temp space for breeding.
@@ -17,6 +18,9 @@ class Neat:
         self.next_pop = population.NeatPopulation(
             num_inputs, num_outputs, num_individuals)
         self.matches = reproduction.Matches(num_individuals)
+
+    def __del__(self):
+        print(f'D Neat {id(self)}')
 
     def random_population(self):
         self.curr_pop.clear()
