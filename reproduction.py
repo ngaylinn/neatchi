@@ -13,6 +13,54 @@ DISJOINT_COEFF = 1.0
 WEIGHT_COEFF = 1.0
 COMPATIBILITY_THRESHOLD = 1.0
 
+@ti.func
+def rand_range(min_val, max_val):
+    return ti.random(dtype=int) % (max_val - min_val) + min_val
+
+@ti.func
+def validate(pop, i):
+    num_nodes = pop.nodes[i].length()
+    num_links = pop.links[i].length()
+    for n in range(num_nodes):
+        node = pop.nodes[i, n]
+        if n < pop.num_inputs:
+            assert node.kind == NodeKinds.INPUT.value
+            assert not node.deleted
+        elif n < pop.nodes[i].length() - pop.num_outputs:
+            assert node.kind == NodeKinds.HIDDEN.value
+        else:
+            assert node.kind == NodeKinds.OUTPUT.value
+            assert not node.deleted
+        assert node.act_func >= 0
+        assert node.act_func < 18 # TODO: Real value.
+        assert node.bias >= 0.0
+        assert node.bias < 1.0
+    for l in range(num_links):
+        link = pop.links[i, l]
+        assert link.from_node >= 0
+        assert link.from_node < num_nodes
+        assert link.to_node >= pop.num_inputs
+        assert link.to_node < num_nodes
+        if not pop.is_recurrent:
+            assert link.to_node > link.from_node
+        assert not pop.nodes[i, link.from_node].deleted
+        assert not pop.nodes[i, link.to_node].deleted
+        assert link.weight >= 0.0
+        assert link.weight < 1.0
+        assert link.innov < pop.innovation_counter[None]
+        for l2 in range(num_links):
+            if l != l2:
+                assert link.innov != pop.links[i, l2].innov
+
+@ti.kernel
+def validate_all_kernel(pop: ti.template()):
+    for i in range(pop.num_individuals):
+        validate(pop, i)
+
+def validate_all(pop):
+    validate_all_kernel(pop)
+
+
 @ti.data_oriented
 class Matches:
     """Data structure for tracking parent / mate pairs and their link lists."""
@@ -20,24 +68,24 @@ class Matches:
     NONE = -1
 
     def __init__(self, num_individuals):
-        print(f'A Matches {id(self)}')
         self.selections = ti.Vector.field(
             n=2, dtype=int, shape=num_individuals)
         self.mate_links = ti.field(
             int, shape=(num_individuals, population.MAX_NETWORK_SIZE))
-
-    def __del__(self):
-        print(f'D Matches {id(self)}')
 
     @ti.kernel
     def update_mate_links(self, pop: ti.template()):
         for i in range(pop.num_individuals):
             p, m = self.selections[i]
             for pl in range(pop.links[p].length()):
-                p_innov = pop.links[p, pl].innov
+                p_link = pop.links[p, pl]
+                if not p_link.deleted:
+                    continue
                 for ml in range(pop.links[m].length()):
-                    m_innov = pop.links[m, ml].innov
-                    if (p_innov == m_innov):
+                    m_link = pop.links[m, ml]
+                    if m_link.deleted:
+                        continue
+                    if (p_link.innov == m_link.innov):
                         self.mate_links[p, pl] = ml
 
     def update(self, pop, selections):
@@ -84,13 +132,93 @@ class Matches:
 @ti.func
 def add_random_link(pop, i):
     num_nodes = pop.nodes[i].length()
-    # Randomly pick any node to be the "from" node for this link.
-    from_node = ti.random(dtype=int) % num_nodes
-    # Randomly pick a non-input node to be the "to" node for this link.
-    to_node = ti.random(dtype=int) % (num_nodes - pop.num_inputs)
-    to_node += pop.num_inputs
+    num_inputs = pop.num_inputs
+
+    from_node, to_node = 0, 0
+    # If this network is recurrent, then randomly pick any two nodes and make a
+    # link between them, but disallow links to input nodes.
+    if pop.is_recurrent:
+        from_node = rand_range(0, num_nodes)
+        to_node = rand_range(num_inputs, num_nodes)
+    # Otherwise, make sure from_node < to_node and disallow links to input
+    # nodes.
+    else:
+        from_node = rand_range(0, num_nodes - 1)
+        to_node = rand_range(ti.max(from_node + 1, num_inputs), num_nodes)
+
+    # Actually make the link, and make sure it gets an innovation number.
     pop.new_link(i, from_node, to_node, ti.random())
 
+@ti.func
+def insert_node(pop, i, n, node):
+    num_nodes = pop.nodes[i].length()
+    # Go through the list, shifting down nodes after the insertion point,
+    # keeping track of where the block of shifted nodes begins and ends.
+    shift_begin, shift_end = n, n
+    for n2 in range(n, num_nodes + 1):
+        shift_end = n2
+        # If we've reached the end of the list, just append the last node.
+        if n2 == num_nodes:
+            pop.nodes[i].append(node)
+        # If the next spot in the list is free, claim it and stop shifting.
+        elif pop.nodes[i, n2].deleted:
+            pop.nodes[i, n2] = node
+            break
+        # Otherwise, insert the node in this position, take whatever node used
+        # to be in that spot, and continue shifting it down.
+        else:
+            pop.nodes[i, n2], node = node, pop.nodes[i, n2]
+
+    # Now that the nodes are in order, go back through the links and update any
+    # references to nodes that got shifted.
+    for l in range(pop.links[i].length()):
+        link = pop.links[i, l]
+        if link.deleted:
+            continue
+        if link.from_node >= shift_begin and link.from_node < shift_end:
+            pop.links[i, l].from_node += 1
+        if link.to_node >= shift_begin and link.to_node < shift_end:
+            pop.links[i, l].to_node += 1
+
+@ti.func
+def add_random_node(pop, i):
+    # We add nodes by splitting a link, so make sure one is available.
+    if pop.links[i].length() == 0:
+        add_random_link(pop, i)
+
+    # Select a random link and mark it as deleted.
+    l = rand_range(0, pop.links[i].length())
+    old_link = pop.links[i, l]
+
+    # Make a node to go between the nodes that link connected, and allocate a
+    # variable for its index (to be determined below).
+    node = Node(NodeKinds.HIDDEN.value,
+                activation_funcs.random(), ti.random())
+    n = 0
+
+    # For a recurrent network, node order doesn't matter, so just append it
+    # at the end.
+    if pop.is_recurrent:
+        n = pop.nodes[i].length()
+        pop.nodes[i].append(node)
+    # Otherwise, we must keep nodes in activation order. Pick a spot to
+    # insert this new node, shift the others out of the way, and insert.
+    # NOTE: This is inefficient, but it makes activation much simpler and
+    # more efficient. If MAX_NETWORK_SIZE increases significantly, it may
+    # be worth revisiting this design.
+    else:
+        # Pick a place to put this node, someplace after the from_node and
+        # before the to_node (though we might take its place).
+        n = rand_range(old_link.from_node, old_link.to_node) + 1
+        insert_node(pop, i, n, node)
+
+    # Actually delete the old link and add new links (with innovation numbers)
+    # to replace it, going to and from the new node we just added.
+    pop.links[i, l].deleted = True
+    # Update old_link in case it got modified by insert_node.
+    old_link = pop.links[i, l]
+    pop.new_link(i, old_link.from_node, n, old_link.weight)
+    pop.new_link(i, n, old_link.to_node, 1.0)
 
 # TODO: Optimize? This is inherently inefficient, since different threads are
 # doing completely different work, but it may be possible to speed up by
@@ -98,28 +226,18 @@ def add_random_link(pop, i):
 # so we apply the same mutation to many genes at once.
 @ti.func
 def mutate_one(pop, i):
-    mutation_kind = ti.random(dtype=int) % 7
+    # TODO: 0, 1, 4, and 6 all cause output to become invalid. 2 and 3 seem
+    # safe, but not sure about 5.
+    mutation_kind = 4 # rand_range(0, 7)
     # Add node
     if mutation_kind == 0 and pop.has_room_for(i, nodes=1, links=2):
-        if pop.links[i].length() == 0:
-            add_random_link(pop, i)
-        l = ti.random(dtype=int) % pop.links[i].length()
-        weight = pop.links[i, l].weight
-        from_node = pop.links[i, l].from_node
-        to_node = pop.links[i, l].to_node
-        pop.links[i, l].deleted = True
-        n = pop.nodes[i].length()
-        pop.nodes[i].append(Node(NodeKinds.HIDDEN.value,
-                                 activation_funcs.random(), ti.random()))
-        pop.new_link(i, from_node, n, weight)
-        pop.new_link(i, n, to_node, 1.0)
+        add_random_node(pop, i)
 
     # Remove node
     elif mutation_kind == 1:
-        num_frozen = pop.num_inputs + pop.num_outputs
-        num_hidden = pop.nodes[i].length() - num_frozen
+        num_hidden = pop.nodes[i].length() - pop.num_inputs + pop.num_outputs
         if num_hidden > 0:
-            n = ti.random(dtype=int) % num_hidden + num_frozen
+            n = rand_range(pop.num_inputs, pop.num_inputs + num_hidden)
             pop.nodes[i, n].deleted = True
             for l in range(pop.links[i].length()):
                 link = pop.links[i, l]
@@ -127,13 +245,13 @@ def mutate_one(pop, i):
                     pop.links[i, l].deleted = True
 
     # Change activation
-    if mutation_kind == 2:
-        n = ti.random(dtype=int) % pop.nodes[i].length()
+    elif mutation_kind == 2:
+        n = rand_range(0, pop.nodes[i].length())
         pop.nodes[i, n].act_func = activation_funcs.random()
 
     # Change bias
     elif mutation_kind == 3:
-        n = ti.random(dtype=int) % pop.nodes[i].length()
+        n = rand_range(0, pop.nodes[i].length())
         pop.nodes[i, n].bias = ti.random()
 
     ## Add link
@@ -142,13 +260,13 @@ def mutate_one(pop, i):
 
     ## Remove link
     elif mutation_kind == 5 and pop.links[i].length() > 0:
-        l = ti.random(dtype=int) % pop.links[i].length()
+        l = rand_range(0, pop.links[i].length())
         pop.links[i, l].deleted = True
 
     # Change weight
     elif mutation_kind == 6:
         if pop.links[i].length() > 0:
-            l = ti.random(dtype=int) % pop.links[i].length()
+            l = rand_range(0, pop.links[i].length())
             pop.links[i, l].weight = ti.random()
         else:
             add_random_link(pop, i)
@@ -162,16 +280,23 @@ def crossover(input_pop, output_pop, i, matches):
         output_pop.nodes[i].append(input_pop.nodes[p, n])
 
     for pl in range(input_pop.links[p].length()):
+        # Look up this link in parent and skip if it's been deleted.
+        p_link = input_pop.links[p, pl]
+        if p_link.deleted:
+            continue
+        link = p_link
+
+        # Look to see if there is a corresponding link in mate.
         ml = matches.mate_links[p, pl]
-        # If parent doesn't have this link, don't include it (in other words,
-        # disjoint and excess genes always come from parent, not mate).
-        if pl != Matches.NONE:
-            # If parent and mate both have this link, pick one at random.
-            # Otherwise, just use the parent's copy.
-            if ml != Matches.NONE and ti.random(dtype=int) % 2:
-                output_pop.links[i].append(input_pop.links[m, ml])
-            else:
-                output_pop.links[i].append(input_pop.links[p, pl])
+        if ml != Matches.NONE:
+            m_link = input_pop.links[m, ml]
+            # If that corresponding link isn't deleted, then maybe use it
+            # instead of parent's copy of this link (50% chance) .
+            if not m_link.deleted and ti.random(dtype=int) % 2:
+                link = m_link
+
+        # Append a copy of this link from either parent or mate.
+        output_pop.links[i].append(link)
 
 @ti.func
 def clone(input_pop, output_pop, i, matches):
@@ -191,6 +316,8 @@ def clone(input_pop, output_pop, i, matches):
 def propagate(input_pop:ti.template(), output_pop: ti.template(),
               matches: ti.template()):
     for i in range(output_pop.num_individuals):
+        assert output_pop.nodes[i].length() == 0
+        assert output_pop.links[i].length() == 0
         # If this couple is compatible and chance is on their side, perform
         # crossover.
         if matches.should_crossover(input_pop, i):
@@ -199,5 +326,6 @@ def propagate(input_pop:ti.template(), output_pop: ti.template(),
         else:
             clone(input_pop, output_pop, i, matches)
 
-        # Finally, mutate the offspring.
-        mutate_one(output_pop, i)
+        # Finally, maybe mutate the offspring.
+        if ti.random() < MUTATION_RATE:
+            mutate_one(output_pop, i)

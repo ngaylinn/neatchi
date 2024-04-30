@@ -13,11 +13,13 @@ MAX_INNOVATIONS = 2**16
 
 @ti.data_oriented
 class NeatPopulation:
-    def __init__(self, num_inputs, num_outputs, num_individuals):
-        print(f'A NeatPopulation {id(self)}')
+    def __init__(self, num_inputs, num_outputs, num_individuals, is_recurrent,
+                 innovation_counter):
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
         self.num_individuals = num_individuals
+        self.is_recurrent = is_recurrent
+        self.innovation_counter = innovation_counter
 
         node_lists = ti.root.dense(ti.i, self.num_individuals) \
                 .dynamic(ti.j, MAX_NETWORK_SIZE, chunk_size=32)
@@ -29,15 +31,11 @@ class NeatPopulation:
         self.links = Link.field()
         link_lists.place(self.links)
 
-        # TODO: Share one across all populations?
-        self.innovation_counter = ti.field(dtype=int, shape=())
-
-    def __del__(self):
-        print(f'D NeatPopulation {id(self)}')
-
     @ti.kernel
     def clear(self):
         for i in range(self.num_individuals):
+            # TODO: Do you need these casts? Make sure we have them everywhere
+            # we need, but not where we don't.
             self.nodes[ti.cast(i, int)].deactivate()
             self.links[ti.cast(i, int)].deactivate()
 
@@ -49,8 +47,8 @@ class NeatPopulation:
     @ti.func
     def new_link(self, i, from_node, to_node, weight):
         """Like add_link, but uses a new innovation number."""
-        link = Link(from_node, to_node, weight)
-        link.innov = ti.atomic_add(self.innovation_counter[None], 1)
+        innov = ti.atomic_add(self.innovation_counter[None], 1)
+        link = Link(from_node, to_node, weight, False, innov)
         self.links[i].append(link)
 
     @ti.kernel
@@ -79,7 +77,9 @@ class NeatPopulation:
             other.links[o].append(self.links[i, l])
 
     def get_one(self, i):
-        pop = NeatPopulation(self.num_inputs, self.num_outputs, 1)
+        pop = NeatPopulation(
+            self.num_inputs, self.num_outputs, 1, self.is_recurrent,
+            self.innovation_counter)
         self.copy_one(i, pop, 0)
         return pop
 
@@ -116,8 +116,3 @@ class NeatPopulation:
             print(f'Individual {i}')
             self.print_one(i)
             print()
-
-def random_population(num_inputs, num_outputs, num_individuals):
-    result = NeatPopulation(num_inputs, num_outputs, num_individuals)
-    result.randomize_all()
-    return result
