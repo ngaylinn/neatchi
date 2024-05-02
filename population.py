@@ -52,20 +52,6 @@ class NeatPopulation:
         self.links[i].append(link)
 
     @ti.kernel
-    def randomize_all(self):
-        for i in range(self.num_individuals):
-            self.links[ti.cast(i, int)].deactivate()
-            self.nodes[ti.cast(i, int)].deactivate()
-            for _ in range(self.num_inputs):
-                self.nodes[i].append(
-                    Node(NodeKinds.INPUT.value,
-                         activation_funcs.random()))
-            for _ in range(self.num_outputs):
-                self.nodes[i].append(
-                    Node(NodeKinds.OUTPUT.value,
-                         activation_funcs.random()))
-
-    @ti.kernel
     def size_of(self, i: int) -> ti.types.vector(2, int):
         return ti.Vector([self.nodes[i].length(), self.links[i].length()])
 

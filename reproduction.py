@@ -313,7 +313,7 @@ def clone(input_pop, output_pop, i, matches):
             output_pop.links[i].append(input_link)
 
 @ti.kernel
-def propagate(input_pop:ti.template(), output_pop: ti.template(),
+def propagate(input_pop: ti.template(), output_pop: ti.template(),
               matches: ti.template()):
     for i in range(output_pop.num_individuals):
         assert output_pop.nodes[i].length() == 0
@@ -329,3 +329,20 @@ def propagate(input_pop:ti.template(), output_pop: ti.template(),
         # Finally, maybe mutate the offspring.
         if ti.random() < MUTATION_RATE:
             mutate_one(output_pop, i)
+
+@ti.kernel
+def random_init(pop: ti.template()):
+    for i in range(pop.num_individuals):
+        pop.links[ti.cast(i, int)].deactivate()
+        pop.nodes[ti.cast(i, int)].deactivate()
+        for _ in range(pop.num_inputs):
+            pop.nodes[i].append(
+                Node(NodeKinds.INPUT.value,
+                     activation_funcs.random(),
+                     ti.random()))
+        for _ in range(pop.num_outputs):
+            pop.nodes[i].append(
+                Node(NodeKinds.OUTPUT.value,
+                     activation_funcs.random(),
+                     ti.random()))
+        mutate_one(pop, i)

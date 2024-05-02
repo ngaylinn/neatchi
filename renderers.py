@@ -3,49 +3,6 @@ import taichi as ti
 from . import activation_funcs
 from .population import MAX_NETWORK_SIZE
 
-# TODO: Something is very wrong with this function. Not only is it failing to
-# access link weight values from pop, it seems to hold a reference to pop and
-# prevent it from ever being deallocated! Perhaps if I rewrite this in a
-# non-recursive way and make it a @ti.func this will go away.
-#@ti.real_func
-#def activate_neuron(pop: ti.template(), i: int, n: int,
-#                    act: ti.template(), w: int, r: int) -> float:
-#    # For Renderers, recursive links are ignored. We implement this by
-#    # refusing to activate a neuron more than once.
-#    if ti.math.isnan(act[w, r, n]):
-#        node = pop.nodes[i, n]
-#        # Set this nodes activation to 0.0 temporarily so that any recurrent
-#        # links discovered during recursion will get this value instead of
-#        # looping indefinitely.
-#        act[w, r, n] = 0.0
-#        raw = 0.0
-#        for l in range(pop.links[i].length()):
-#            link = pop.links[i, l]
-#            if not link.deleted and link.to_node == n:
-#                value = activate_neuron(pop, i, link.from_node, act, w, r)
-#                # TODO: For some reason, weights from input neurons always seem
-#                # to be 0.0?! But only when I read them here.
-#                raw += value * 1.0 # link.weight
-#        act[w, r, n] = activation_funcs.call(node.act_func, raw + node.bias)
-#    return act[w, r, n]
-#
-#@ti.func
-#def activate_network(inputs, pop, i, act, w, r):
-#    # Initialize activations for all nodes.
-#    for n in range(pop.nodes[i].length()):
-#        # Input nodes get activation values taken from the inputs argument.
-#        if n < pop.num_inputs:
-#            act[w, r, n] = inputs[n]
-#        # Other nodes get a nan value to indicate they haven't activated.
-#        else:
-#            act[w, r, n] = ti.math.nan
-#
-#    # Recursively calculate activation values for the output neuron (it
-#    # comes immediately after the input neurons).
-#    # TODO: Support more than one channel in the output.
-#    return ti.math.clamp(
-#        activate_neuron(pop, i, pop.num_inputs, act, w, r), 0.0, 1.0)
-
 
 @ti.func
 def activate_network(inputs, pop, i, act, w, r):

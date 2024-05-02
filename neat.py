@@ -23,7 +23,7 @@ class Neat:
 
     def random_population(self):
         self.curr_pop.clear()
-        self.curr_pop.randomize_all()
+        reproduction.random_init(self.curr_pop)
         return self.curr_pop
 
     def propagate(self, matches):
@@ -32,8 +32,7 @@ class Neat:
 
         self.next_pop.clear()
         reproduction.propagate(self.curr_pop, self.next_pop, self.matches)
-        # TODO: Remove this.
-        reproduction.validate_all(self.next_pop)
+        # reproduction.validate_all(self.next_pop)
 
         self.curr_pop, self.next_pop = self.next_pop, self.curr_pop
         return self.curr_pop
