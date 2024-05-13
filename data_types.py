@@ -1,14 +1,19 @@
+"""DataStructures representing CPPNs.
+
+The Node class represents a single neuron and the Link class represents a
+synapse between two neurons. Both data types are stored in dynamic fields,
+which are logically "lists" but don't support removing items. For this reason,
+both Nodes and Links have a deleted attribute, indicating they have been
+deleted and should be ignored for activations. Reproduction.py does some
+opportunistic cleanup of these data structures, but no effort is made to
+regularly clear out all deleted nodes.
+"""
+
 from enum import Enum
 
 import taichi as ti
 
 from .activation_funcs import ActivationFuncs
-
-# TODO: Currently, this library does no clean up of these data structures as
-# they evolve. Over time, deleted node and link objects will accumulate,
-# wasting space and clock cycles, for no reason. It's unclear whether it is
-# better to accept this mess, or to put in the time and effort to actively
-# rebuild the data structures from time to time.
 
 class NodeKinds(Enum):
     INPUT = 0

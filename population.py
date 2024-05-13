@@ -1,14 +1,18 @@
+"""A collection of CPPNs to evolve using the Neat algorithm.
+
+Each population is a collection of CPPNs with the same properties (number of
+inputs and outputs, whether the network is recurrent or not). The population
+contains large fields of Node and Link objects for all the CPPNs in the
+population. These fields are dynamic, which means they grow in size like lists
+as the CPPNs evolve. This means activation time also slows down as the CPPNs
+evolve to be more complex.
+"""
+
 import taichi as ti
 
-from . import activation_funcs
-from .data_types import Link, Node, NodeKinds, link_to_str, node_to_str
+from .data_types import Link, Node, link_to_str, node_to_str
 
-# Max sizes used to construct efficient lookup tables in reproduction.py
-# TODO: I tore out this optimization because it was causing annoying implicit
-# cast warnings. Add it back if it seems worthwhile.
-# NETWORK_INDEX_DTYPE = ti.uint8
 MAX_NETWORK_SIZE = 2**8
-MAX_INNOVATIONS = 2**16
 
 
 @ti.data_oriented
@@ -46,7 +50,7 @@ class NeatPopulation:
 
     @ti.func
     def new_link(self, i, from_node, to_node, weight):
-        """Like add_link, but uses a new innovation number."""
+        """Adds a link with a new innovation number, for mutations."""
         innov = ti.atomic_add(self.innovation_counter[None], 1)
         link = Link(from_node, to_node, weight, False, innov)
         self.links[i].append(link)
@@ -54,20 +58,6 @@ class NeatPopulation:
     @ti.kernel
     def size_of(self, i: int) -> ti.types.vector(2, int):
         return ti.Vector([self.nodes[i].length(), self.links[i].length()])
-
-    @ti.kernel
-    def copy_one(self, i: int, other: ti.template(), o: int):
-        for n in range(self.nodes[i].length()):
-            other.nodes[o].append(self.nodes[i, n])
-        for l in range(self.links[i].length()):
-            other.links[o].append(self.links[i, l])
-
-    def get_one(self, i):
-        pop = NeatPopulation(
-            self.num_inputs, self.num_outputs, 1, self.is_recurrent,
-            self.innovation_counter)
-        self.copy_one(i, pop, 0)
-        return pop
 
     def print_one(self, i):
         def print_edge(num_cells, top):

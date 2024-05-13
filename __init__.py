@@ -1,8 +1,7 @@
-from . import controllers
+from . import actuators
 from . import neat
-from . import renderers
 
 Neat = neat.Neat
-NeatControllers = controllers.NeatControllers
-NeatRenderers = renderers.NeatRenderers
+ActivationMaps = actuators.ActivationMaps
+Actuators = actuators.Actuators
 

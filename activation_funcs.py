@@ -1,3 +1,10 @@
+"""Activation functions for the CPPNs.
+
+In a CPPN, each neuron has its own activation function, chosen from the
+ActivationFuncs enum. Use the random() function to get a randomly chosen
+activation function and the call() function to invoke one by its enum value.
+"""
+
 from enum import Enum
 
 import taichi as ti
@@ -107,6 +114,8 @@ def activate_cube(raw):
     return raw ** 3
 
 
+# TODO: Should this be a regular @ti.func?
+# TODO: Should you use ti.static on the ifs?
 @ti.real_func
 def call(act_func: int, raw: float) -> float:
     if act_func == ActivationFuncs.SIGMOID.value:

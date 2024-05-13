@@ -1,3 +1,16 @@
+"""Code for random initialization, crossover, mutations, etc.
+
+This module is used to populate and modify the CPPNs in NeatPopulation
+objects. The random_init() function generates one from scratch, while the
+propoagate() function generates one from the previous population, either
+cloning or performing crossover on selected individuals. All new individuals in
+the population are subject to mutations, which modify the structure of their
+CPPN by adding, removing, or changing neurons (nodes) or synapses (links).
+These operations should always produce valid CPPNs, with nodes sorted in
+activation order for non-recurrent networks. The validate*() functions can be
+used to confirm the new CPPNs are all consistent and correct.
+"""
+
 import taichi as ti
 
 from . import activation_funcs
@@ -83,7 +96,7 @@ class Matches:
                     continue
                 for ml in range(pop.links[m].length()):
                     m_link = pop.links[m, ml]
-                    if m_link.deleted:
+                    if ml == pl or m_link.deleted:
                         continue
                     if (p_link.innov == m_link.innov):
                         self.mate_links[p, pl] = ml
