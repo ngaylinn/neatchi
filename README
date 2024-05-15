@@ -1,0 +1,6 @@
+This is an early prototype of a massively-parallel implementation of the NEAT
+algorithm, written in Taichi. The intention of this library is to provide a
+high-performance tool for evolving and activating very large populations of
+CPPNs in a way that is project agnostic, customizable, and eaty to use for many
+different purposes. It isn't yet fully featured, optimized, or polished for use
+by third parties, but perhaps it will get there in time.
