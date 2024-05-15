@@ -2,13 +2,22 @@
 
 This module is used to populate and modify the CPPNs in NeatPopulation
 objects. The random_init() function generates one from scratch, while the
-propoagate() function generates one from the previous population, either
-cloning or performing crossover on selected individuals. All new individuals in
-the population are subject to mutations, which modify the structure of their
-CPPN by adding, removing, or changing neurons (nodes) or synapses (links).
-These operations should always produce valid CPPNs, with nodes sorted in
-activation order for non-recurrent networks. The validate*() functions can be
-used to confirm the new CPPNs are all consistent and correct.
+propagate() function generates one from the previous population, either
+cloning or performing crossover on selected individuals.
+
+All new individuals in the population are subject to mutations, which modify
+the structure of their CPPN by adding, removing, or changing neurons (nodes) or
+synapses (links). These operations should always produce valid CPPNs, with
+nodes sorted in activation order for non-recurrent networks. The validate*()
+functions can be used to confirm the new CPPNs are all consistent and correct,
+and serves to document the invariants for a well-formed CPPN.
+
+This implementation of the NEAT algorithm enforces that only "compatible"
+individuals are bred together, as determined by Matches.is_compatible(), which
+computes the weighted sum of a few difference metrics. It does not explicitly
+break the population into species, since this is not desirable in all cases.
+Since selection is handled by the caller, it is possible to implement this
+behavior manually. In the future, a standard implementation may be provided.
 """
 
 import taichi as ti
@@ -22,12 +31,18 @@ CROSSOVER_RATE = 0.6
 
 # Constants for testing compatibility between two individuals in a Population.
 # TODO: Tune these!
+# TODO: Maybe compute compatibility pairwise for many individuals, so that
+# selection can pick a compatible mate rather than merely filtering out
+# incompatible selections after the fact.
+# TODO: Capture and report compatibility / diversity metrics for the
+# population?
 DISJOINT_COEFF = 1.0
 WEIGHT_COEFF = 1.0
 COMPATIBILITY_THRESHOLD = 1.0
 
 @ti.func
 def rand_range(min_val, max_val):
+    """Pick a random int from the given range."""
     return ti.random(dtype=int) % (max_val - min_val) + min_val
 
 @ti.func
@@ -45,7 +60,7 @@ def validate(pop, i):
             assert node.kind == NodeKinds.OUTPUT.value
             assert not node.deleted
         assert node.act_func >= 0
-        assert node.act_func < 18 # TODO: Real value.
+        assert node.act_func < activation_funcs.NUM_ACTIVATION_FUNCS
         assert node.bias >= 0.0
         assert node.bias < 1.0
     for l in range(num_links):
@@ -83,21 +98,28 @@ class Matches:
     def __init__(self, num_individuals):
         self.selections = ti.Vector.field(
             n=2, dtype=int, shape=num_individuals)
+        # A table mapping the indices for each link in each parent to the
+        # corresponding link index in that parent's mate (if there is one).
         self.mate_links = ti.field(
             int, shape=(num_individuals, population.MAX_NETWORK_SIZE))
 
     @ti.kernel
     def update_mate_links(self, pop: ti.template()):
+        # For each individual child
         for i in range(pop.num_individuals):
+            # Find its selected parent / parent's mate
             p, m = self.selections[i]
+            # For all of parent's links
             for pl in range(pop.links[p].length()):
                 p_link = pop.links[p, pl]
                 if not p_link.deleted:
                     continue
+                # Compare with all of mate's links
                 for ml in range(pop.links[m].length()):
                     m_link = pop.links[m, ml]
-                    if ml == pl or m_link.deleted:
+                    if m_link.deleted:
                         continue
+                    # Links correspond if they have the same innovation number.
                     if (p_link.innov == m_link.innov):
                         self.mate_links[p, pl] = ml
 
@@ -124,7 +146,7 @@ class Matches:
                     input_pop.links[m, ml].weight)
 
             # If just one of parent and mate have this link, it's "disjoint." The
-            # original Neat algorithm discriminates between "disjoint" and "excess"
+            # original NEAT algorithm discriminates between "disjoint" and "excess"
             # genes, but here we treat them all the same.
             elif (pl != self.NONE or ml != self.NONE):
                 num_total += 1
@@ -136,6 +158,9 @@ class Matches:
     @ti.func
     def should_crossover(self, input_pop, i):
         p, m = self.selections[i]
+        # Reproduction is asexual by default, but if selection chose a distinct
+        # parent and mate, they are compatible with each other, and luck is on
+        # their side, then perform sexual reproduction with crossover.
         result = False
         if p != m and ti.random() < CROSSOVER_RATE:
             result = self.is_compatible(input_pop, i)
@@ -144,6 +169,7 @@ class Matches:
 
 @ti.func
 def add_random_link(pop, i):
+    """Add a random link to the specified CPPN as a new innovation."""
     num_nodes = pop.nodes[i].length()
     num_inputs = pop.num_inputs
 
@@ -164,6 +190,7 @@ def add_random_link(pop, i):
 
 @ti.func
 def insert_node(pop, i, n, node):
+    """Add a node to a CPPN, keeping the node list sorted (slow!)."""
     num_nodes = pop.nodes[i].length()
     # Go through the list, shifting down nodes after the insertion point,
     # keeping track of where the block of shifted nodes begins and ends.
@@ -195,6 +222,7 @@ def insert_node(pop, i, n, node):
 
 @ti.func
 def add_random_node(pop, i):
+    """Replace one link with a node and two links in the same place."""
     # We add nodes by splitting a link, so make sure one is available.
     if pop.links[i].length() == 0:
         add_random_link(pop, i)
@@ -239,19 +267,22 @@ def add_random_node(pop, i):
 # so we apply the same mutation to many genes at once.
 @ti.func
 def mutate_one(pop, i):
-    # TODO: 0, 1, 4, and 6 all cause output to become invalid. 2 and 3 seem
-    # safe, but not sure about 5.
-    mutation_kind = 4 # rand_range(0, 7)
+    """Randomly choose one kind of mutation and apply it."""
+    mutation_kind = rand_range(0, 7)
+
     # Add node
+    # NOTE: no mutation is applied if the CPPN is already at max size.
     if mutation_kind == 0 and pop.has_room_for(i, nodes=1, links=2):
         add_random_node(pop, i)
 
     # Remove node
+    # NOTE: no mutation is applied if the CPPN has no nodes.
     elif mutation_kind == 1:
         num_hidden = pop.nodes[i].length() - pop.num_inputs + pop.num_outputs
         if num_hidden > 0:
             n = rand_range(pop.num_inputs, pop.num_inputs + num_hidden)
             pop.nodes[i, n].deleted = True
+            # Also delete any links that refer to this node.
             for l in range(pop.links[i].length()):
                 link = pop.links[i, l]
                 if (link.from_node == n or link.to_node == n):
@@ -267,11 +298,13 @@ def mutate_one(pop, i):
         n = rand_range(0, pop.nodes[i].length())
         pop.nodes[i, n].bias = ti.random()
 
-    ## Add link
+    # Add link
+    # NOTE: no mutation is applied if the CPPN is already at max size.
     elif mutation_kind == 4 and pop.has_room_for(i, nodes=0, links=1):
         add_random_link(pop, i)
 
-    ## Remove link
+    # Remove link
+    # NOTE: no mutation is applied if the CPPN has no links.
     elif mutation_kind == 5 and pop.links[i].length() > 0:
         l = rand_range(0, pop.links[i].length())
         pop.links[i, l].deleted = True
@@ -281,6 +314,8 @@ def mutate_one(pop, i):
         if pop.links[i].length() > 0:
             l = rand_range(0, pop.links[i].length())
             pop.links[i, l].weight = ti.random()
+        # If there are no links, add a random link instead instead of not
+        # applying any mutation.
         else:
             add_random_link(pop, i)
 
@@ -329,8 +364,6 @@ def clone(input_pop, output_pop, i, matches):
 def propagate(input_pop: ti.template(), output_pop: ti.template(),
               matches: ti.template()):
     for i in range(output_pop.num_individuals):
-        assert output_pop.nodes[i].length() == 0
-        assert output_pop.links[i].length() == 0
         # If this couple is compatible and chance is on their side, perform
         # crossover.
         if matches.should_crossover(input_pop, i):
@@ -345,6 +378,8 @@ def propagate(input_pop: ti.template(), output_pop: ti.template(),
 
 @ti.kernel
 def random_init(pop: ti.template()):
+    # Generate a population of individuals with no hidden nodes, random
+    # activation functions, and one random mutation each.
     for i in range(pop.num_individuals):
         pop.links[ti.cast(i, int)].deactivate()
         pop.nodes[ti.cast(i, int)].deactivate()

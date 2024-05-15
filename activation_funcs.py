@@ -10,6 +10,7 @@ from enum import Enum
 import taichi as ti
 
 # TODO: Are these the right activations? All taken from neat-python package.
+# TODO: Where do all the inline constants come from? Are they appropriate?
 # TODO: Consider letting the caller choose a set of activation functions.
 class ActivationFuncs(Enum):
     SIGMOID = 0
@@ -30,6 +31,8 @@ class ActivationFuncs(Enum):
     HAT = 15
     SQUARE = 16
     CUBE = 17
+
+NUM_ACTIVATION_FUNCS = len(ActivationFuncs.__members__)
 
 @ti.func
 def random():

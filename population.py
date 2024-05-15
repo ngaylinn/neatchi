@@ -4,8 +4,8 @@ Each population is a collection of CPPNs with the same properties (number of
 inputs and outputs, whether the network is recurrent or not). The population
 contains large fields of Node and Link objects for all the CPPNs in the
 population. These fields are dynamic, which means they grow in size like lists
-as the CPPNs evolve. This means activation time also slows down as the CPPNs
-evolve to be more complex.
+as the CPPNs evolve. This means that the time spent on reproduction and
+activation increases as the CPPNs evolve to be more complex.
 """
 
 import taichi as ti
@@ -38,8 +38,6 @@ class NeatPopulation:
     @ti.kernel
     def clear(self):
         for i in range(self.num_individuals):
-            # TODO: Do you need these casts? Make sure we have them everywhere
-            # we need, but not where we don't.
             self.nodes[ti.cast(i, int)].deactivate()
             self.links[ti.cast(i, int)].deactivate()
 

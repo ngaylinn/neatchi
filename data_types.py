@@ -2,9 +2,9 @@
 
 The Node class represents a single neuron and the Link class represents a
 synapse between two neurons. Both data types are stored in dynamic fields,
-which are logically "lists" but don't support removing items. For this reason,
-both Nodes and Links have a deleted attribute, indicating they have been
-deleted and should be ignored for activations. Reproduction.py does some
+which are "lists" semantically, but don't support removing items. For this
+reason, both Nodes and Links have a deleted attribute, indicating they have
+been deleted and should be ignored for activations. Reproduction.py does some
 opportunistic cleanup of these data structures, but no effort is made to
 regularly clear out all deleted nodes.
 """

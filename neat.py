@@ -1,4 +1,13 @@
-import numpy as np
+"""The core NEAT algorithm.
+
+This Neat class manages the data allocations used to repeatedly breed a
+NeatPopulation of CPPNs. It uses a double buffer to represent the current
+generation of CPPNs and a scratch space for generating the next generation. It
+also has a Matches object for holding all the metadata needed for a single
+breeding process. To actually use any of the CPPNs from the population, use
+Actuators or ActivationMaps.
+"""
+
 import taichi as ti
 
 from . import population
@@ -32,7 +41,7 @@ class Neat:
 
         self.next_pop.clear()
         reproduction.propagate(self.curr_pop, self.next_pop, self.matches)
-        # reproduction.validate_all(self.next_pop)
+        reproduction.validate_all(self.next_pop)
 
         self.curr_pop, self.next_pop = self.next_pop, self.curr_pop
         return self.curr_pop

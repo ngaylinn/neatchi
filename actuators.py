@@ -4,7 +4,7 @@ The Actuators class is used to call CPPNs from a NeatPopulation from a number
 of parallel worlds, possibly with multiple parallel activations in each world.
 This requires allocating memory proportional to MAX_NETWORK_SIZE * num_worlds *
 num_activations. Mappings from population indices to world indices are handled
-with the world_assignments, which get updated each time the population is
+with the world_assignments field, which get updated each time the population is
 propagated.
 
 The ActivationMap class is similar, except its used to render a 2D map of
