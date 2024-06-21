@@ -29,8 +29,10 @@ from .data_types import Node, NodeKinds
 MUTATION_RATE = 0.01
 CROSSOVER_RATE = 0.6
 
+# TODO: Are these ranges reasonable?
 BIAS_RANGE = 1.0
 GAIN_RANGE = 8.0
+WEIGHT_RANGE = 1.0
 
 # Constants for testing compatibility between two individuals in a Population.
 # TODO: Tune these!
@@ -66,7 +68,7 @@ def validate(pop, i):
     valid = True
     for n in range(num_nodes):
         node = pop.nodes[i, n]
-        #print('validating node', i, n, node.kind, node.act_func, node.bias, node.gain, node.deleted)
+        print('validating node', i, n, node.kind, node.act_func, node.bias, node.gain, node.deleted)
         if n < pop.num_inputs:
             if node.kind != NodeKinds.INPUT.value:
                 print('Validation error: node', n, ', node.kind != NodeKinds.INPUT.value')
@@ -105,7 +107,7 @@ def validate(pop, i):
                 valid = False
     for l in range(num_links):
         link = pop.links[i, l]
-        #print('validating link', i, l, link.from_node, link.to_node, link.weight, link.deleted, link.innov)
+        print('validating link', i, l, link.from_node, link.to_node, link.weight, link.deleted, link.innov)
         if link.from_node < 0:
             print('Validation error: link', l, ', link.from_node < 0')
             valid = False
@@ -128,11 +130,11 @@ def validate(pop, i):
             if pop.nodes[i, link.to_node].deleted:
                 print('Validation error: link', l, ', pop.nodes[i, link.to_node].deleted')
                 valid = False
-            if link.weight < 0.0:
-                print('Validation error: link', l, ', link.weight < 0.0')
+            if link.weight < -WEIGHT_RANGE:
+                print('Validation error: link', l, ', link.weight <', -WEIGHT_RANGE)
                 valid = False
-            if link.weight > 1.0:
-                print('Validation error: link', l, ', link.weight > 1.0')
+            if link.weight > WEIGHT_RANGE:
+                print('Validation error: link', l, ', link.weight >', WEIGHT_RANGE)
                 valid = False
             if link.innov >= pop.innovation_counter[None]:
                 print('Validation error: link', l, ', link.innov >= pop.innovation_counter[None]')
@@ -255,9 +257,12 @@ def add_random_link(pop, i):
 
 @ti.func
 def make_random_node(node_type):
-    return Node(node_type, activation_funcs.random(),
-                2 * BIAS_RANGE * ti.random() - BIAS_RANGE,
-                2 * GAIN_RANGE * ti.random() - GAIN_RANGE)
+    return Node(
+        node_type,
+        activation_funcs.random(),
+        2 * BIAS_RANGE * ti.random() - BIAS_RANGE,
+        2 * GAIN_RANGE * ti.random() - GAIN_RANGE,
+        False)
 
 
 @ti.func
@@ -302,51 +307,57 @@ def add_random_node(pop, i):
 
     # Select a random link to be split in two with the new node between the two
     # halves.
-    # TODO: This doesn't check if the link has been deleted or not. That works,
-    # but it's a little surprising.
     l = rand_range(0, pop.links[i].length())
     old_link = pop.links[i, l]
 
-    # Make a node to go between the nodes that link connected, and allocate a
-    # variable for its index (to be determined below).
-    node = make_random_node(NodeKinds.HIDDEN.value)
-    n = 0
+    # Don't split a deleted link.
+    # TODO: This means we will actually add new nodes less often as the
+    # networks grow in size, which is undesirable!
+    if not old_link.deleted:
+        # Make a node to go between the nodes that link connected, and allocate
+        # a variable for its index (to be determined below).
+        node = make_random_node(NodeKinds.HIDDEN.value)
+        n = 0
 
-    # For a recurrent network, node order doesn't matter, so just append it
-    # at the end.
-    if pop.is_recurrent:
-        n = pop.nodes[i].length()
-        pop.nodes[i].append(node)
-    # Otherwise, we must keep nodes in activation order. Pick a spot to
-    # insert this new node, shift the others out of the way, and insert.
-    # NOTE: This is inefficient, but it makes activation much simpler and
-    # more efficient. If MAX_NETWORK_SIZE increases significantly, it may
-    # be worth revisiting this design.
-    else:
-        # Pick a place to put this node, someplace after the from_node and
-        # before the to_node (though we might take its place). To respect the
-        # node order invariant, the new index must be between the last input
-        # node and the first output node.
-        n = rand_range(
-            ti.max(old_link.from_node, pop.num_inputs - 1),
-            ti.min(old_link.to_node, pop.nodes[i].length() - pop.num_outputs)
-        ) + 1
-        insert_node(pop, i, n, node)
+        # For a recurrent network, node order doesn't matter, so just append it
+        # at the end.
+        if pop.is_recurrent:
+            n = pop.nodes[i].length()
+            pop.nodes[i].append(node)
+        # Otherwise, we must keep nodes in activation order. Pick a spot to
+        # insert this new node, shift the others out of the way, and insert.
+        # NOTE: This is inefficient, but it makes activation much simpler and
+        # more efficient. If MAX_NETWORK_SIZE increases significantly, it may
+        # be worth revisiting this design.
+        else:
+            # Pick a place to put this node, someplace after the from_node and
+            # before the to_node (though we might take its place). To respect
+            # the node order invariant, the new index must be between the last
+            # input node and the first output node.
+            n = rand_range(
+                ti.max(old_link.from_node, pop.num_inputs - 1),
+                ti.min(old_link.to_node, pop.nodes[i].length() - pop.num_outputs)
+            ) + 1
+            insert_node(pop, i, n, node)
 
-    # Mark the node we chose as deleted.
-    pop.links[i, l].deleted = True
-    # Insert may have updated node indexes, so refresh our local copy of this
-    # link to make sure from_node and to_node are up to date.
-    old_link = pop.links[i, l]
-    # Add new links (with new innovation numbers) linking the old from_node to
-    # the new node (with index n) to the old to_node.
-    pop.new_link(i, old_link.from_node, n, old_link.weight)
-    pop.new_link(i, n, old_link.to_node, 1.0)
+        # Mark the node we chose as deleted.
+        pop.links[i, l].deleted = True
+        # Insert may have updated node indexes, so refresh our local copy of
+        # this link to make sure from_node and to_node are up to date.
+        old_link = pop.links[i, l]
+        # Add new links (with new innovation numbers) linking the old from_node
+        # to the new node (with index n) to the old to_node.
+        pop.new_link(i, old_link.from_node, n, old_link.weight)
+        pop.new_link(i, n, old_link.to_node, 1.0)
 
 # TODO: Optimize? This is inherently inefficient, since different threads are
 # doing completely different work, but it may be possible to speed up by
 # reducing the length of the longest branch or by reorienting the computation
 # so we apply the same mutation to many genes at once.
+# TODO: Several of these mutation operations do not account for deleted links
+# and nodes, which means the true rate of mutations will actually decrease as
+# the networks grow in size. Fix this! Unfortunately, the best way might be to
+# rebuild the lists in every generation, eliminating deleted entries.
 @ti.func
 def mutate_one(pop, i):
     """Randomly choose one kind of mutation and apply it."""
@@ -378,12 +389,16 @@ def mutate_one(pop, i):
     # Change bias
     elif mutation_kind == 3:
         n = rand_range(0, pop.nodes[i].length())
-        pop.nodes[i, n].bias += ti.randn() * BIAS_RANGE
+        pop.nodes[i, n].bias = ti.math.clamp(
+            pop.nodes[i, n].bias + ti.randn() * BIAS_RANGE,
+            -BIAS_RANGE, BIAS_RANGE)
 
     # Change gain
     elif mutation_kind == 3:
         n = rand_range(0, pop.nodes[i].length())
-        pop.nodes[i, n].gain = ti.randn() *  GAIN_RANGE
+        pop.nodes[i, n].gain = ti.math.clamp(
+            pop.nodes[i, n].gain + ti.randn() *  GAIN_RANGE,
+            -GAIN_RANGE, GAIN_RANGE)
 
     # Add link
     # NOTE: no mutation is applied if the CPPN is already at max size.
@@ -400,7 +415,9 @@ def mutate_one(pop, i):
     elif mutation_kind == 7:
         if pop.links[i].length() > 0:
             l = rand_range(0, pop.links[i].length())
-            pop.links[i, l].weight = ti.random()
+            pop.links[i, l].weight = ti.math.clamp(
+                pop.links[i, l].weight + ti.randn() * WEIGHT_RANGE,
+                -WEIGHT_RANGE, WEIGHT_RANGE)
         # If there are no links, add a random link instead instead of not
         # applying any mutation.
         else:
