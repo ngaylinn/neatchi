@@ -40,7 +40,7 @@ def activate_network(inputs, pop, i, act_in, act_out, w, a):
                     value = act_in[w, a, link.from_node]
                     raw += value * link.weight
             act_out[w, a, n] = activation_funcs.call(
-                node.act_func, raw + node.bias)
+                node.act_func, (node.gain * raw) + node.bias)
 
     # Return a vector of the activation values for just the output nodes.
     return ti.Vector([
@@ -51,39 +51,50 @@ def activate_network(inputs, pop, i, act_in, act_out, w, a):
 @ti.data_oriented
 class Actuators:
     """Activate CPPNs from a NeatPopulation."""
-    def __init__(self, num_worlds, num_activations, recurrent=True):
-        self.recurrent = recurrent
+    def __init__(self, num_worlds, num_activations, is_recurrent=True):
+        self.is_recurrent = is_recurrent
         self.world_assignments = ti.field(int, shape=num_worlds)
+        # By default, assume the NeatPopulation has one individual per world
+        # and that these correspond 1:1. The caller can override this by
+        # passing alternative world assignments to update().
+        self.world_assignments.from_numpy(
+            np.arange(num_worlds, dtype=np.int32))
         self.act = ti.field(
             float, shape=(num_worlds, num_activations, MAX_NETWORK_SIZE))
-        if recurrent:
+        if is_recurrent:
             self.next_act = ti.field(
                 float, shape=(num_worlds, num_activations, MAX_NETWORK_SIZE))
         else:
             self.next_act = self.act
 
-    def update(self, pop, world_assignments):
+    def update(self, world_assignments=None):
         """Update the population CPPNs and world assignments for activation."""
-        self.pop = pop
-        self.world_assignments.from_numpy(world_assignments)
-        self.act.fill(0.0)
+        if world_assignments is not None:
+            self.world_assignments.from_numpy(world_assignments)
+        # If this is a recurrent network, clear out the activation buffer to
+        # make sure state from the last population doesn't leak into this one.
+        # For a non-recurrent network, the full conents of this buffer are
+        # never read, and always overwritten on each call to activate, so
+        # there's no need.
+        if self.is_recurrent:
+            self.act.fill(0.0)
 
     @ti.func
-    def activate(self, inputs, w, a):
+    def activate(self, inputs, pop, w, a):
         """Activate this CPPN and return its output value(s).
 
         w is the world_index, indicating which CPPN in the population to use.
         a is the activation index, used to allow multiple parallel activations.
         """
-        result = ti.Vector([0.0] * self.pop.num_outputs)
+        result = ti.Vector([0.0] * pop.num_outputs)
         i = self.world_assignments[w]
         result = activate_network(
-            inputs, self.pop, i, self.act, self.next_act, w, a)
+            inputs, pop, i, self.act, self.next_act, w, a)
         return result
 
     def finalize_activation(self):
         """Call after all calls to activate() in one time step are done."""
-        if ti.static(self.recurrent):
+        if ti.static(self.is_recurrent):
             # Once all the activations have been computed, swap the activation
             # buffers so that the last set of outputs serves as inputs in the
             # next activation.
@@ -96,6 +107,11 @@ class ActivationMaps:
     def __init__(self, num_worlds, num_individuals, map_size):
         self.map_size = map_size
         self.world_assignments = ti.field(int, shape=num_worlds)
+        # By default, assume the NeatPopulation has one individual per world
+        # and that these correspond 1:1. The caller can override this by
+        # passing alternative world assignments to update().
+        self.world_assignments.from_numpy(
+            np.arange(num_worlds, dtype=np.int32))
         self.act = ti.field(
             float, shape=(num_individuals, map_size, MAX_NETWORK_SIZE))
         self.maps = ti.field(
@@ -110,10 +126,13 @@ class ActivationMaps:
                 self.maps[i, r, c] = activate_network(
                     inputs, self.pop, i, self.act, self.act, i, r)[0]
 
-    def update(self, pop, world_assignments):
+    # TODO: This doesn't work. render_kernel() doesn't see the updated
+    # references, so you have to pass pop each time!
+    def update(self, pop, world_assignments=None):
         """Update the population CPPNs and world assignments for activation."""
         self.pop = pop
-        self.world_assignments.from_numpy(world_assignments)
+        if world_assignments is not None:
+            self.world_assignments.from_numpy(world_assignments)
         self.render_kernel()
 
     @ti.kernel
@@ -128,7 +147,7 @@ class ActivationMaps:
         return result
 
     @ti.func
-    def lookup(self, w, x, y):
+    def lookup(self, world_assignments, w, x, y):
         """Lookup the activation value for some map location in some world."""
         i = self.world_assignments[w]
         return self.maps[i, x, y]
