@@ -29,6 +29,9 @@ from .data_types import Node, NodeKinds
 MUTATION_RATE = 0.01
 CROSSOVER_RATE = 0.6
 
+BIAS_RANGE = 1.0
+GAIN_RANGE = 8.0
+
 # Constants for testing compatibility between two individuals in a Population.
 # TODO: Tune these!
 # TODO: Maybe compute compatibility pairwise for many individuals, so that
@@ -45,40 +48,101 @@ def rand_range(min_val, max_val):
     """Pick a random int from the given range."""
     return ti.random(dtype=int) % (max_val - min_val) + min_val
 
+
+# NOTE: Taichi's assert statement provides minimal useful information and isn't
+# evaluated until after the kernel completes, so I need all these verbose if
+# statements instead. Gross.
 @ti.func
 def validate(pop, i):
+    """Check all invariants on the given NN, for debugging code in this file.
+
+    Recommend running this with ti.init(arch=ti.cpu, cpu_max_num_threads=1) to
+    ensure the last message on screen corresponds to the error that caused the
+    assert to fail. Uncommon print statements below to see which node / link in
+    the population triggered the error and why.
+    """
     num_nodes = pop.nodes[i].length()
     num_links = pop.links[i].length()
+    valid = True
     for n in range(num_nodes):
         node = pop.nodes[i, n]
+        #print('validating node', i, n, node.kind, node.act_func, node.bias, node.gain, node.deleted)
         if n < pop.num_inputs:
-            assert node.kind == NodeKinds.INPUT.value
-            assert not node.deleted
+            if node.kind != NodeKinds.INPUT.value:
+                print('Validation error: node', n, ', node.kind != NodeKinds.INPUT.value')
+                valid = False
+            if node.deleted:
+                print('Validation error: node', n, ', node.deleted')
+                valid = False
         elif n < pop.nodes[i].length() - pop.num_outputs:
-            assert node.kind == NodeKinds.HIDDEN.value
+            if node.kind != NodeKinds.HIDDEN.value:
+                print('Validation error: node', n, ', node.kind != NodeKinds.HIDDEN.value')
+                valid = False
         else:
-            assert node.kind == NodeKinds.OUTPUT.value
-            assert not node.deleted
-        assert node.act_func >= 0
-        assert node.act_func < activation_funcs.NUM_ACTIVATION_FUNCS
-        assert node.bias >= 0.0
-        assert node.bias < 1.0
+            if node.kind != NodeKinds.OUTPUT.value:
+                print('Validation error: node', n, ', node.kind != NodeKinds.OUTPUT.value')
+                valid = False
+            if node.deleted:
+                print('Validation error: node', n, ', node.deleted')
+                valid = False
+            if node.act_func < 0:
+                print('Validation error: node', n, ', node.act_func < 0')
+                valid = False
+            if node.act_func >= activation_funcs.NUM_ACTIVATION_FUNCS:
+                print('Validation error: node', n, ', node.act_func >= activation_funcs.NUM_ACTIVATION_FUNCS')
+                valid = False
+            if node.bias < -BIAS_RANGE:
+                print('Validation error: node', n, ', node.bias <', -BIAS_RANGE)
+                valid = False
+            if node.bias > BIAS_RANGE:
+                print('Validation error: node', n, ', node.bias >', BIAS_RANGE)
+                valid = False
+            if node.gain < -GAIN_RANGE:
+                print('Validation error: node', n, ', node.gain <', -GAIN_RANGE)
+                valid = False
+            if node.gain > GAIN_RANGE:
+                print('Validation error: node', n, ', node.gain >', GAIN_RANGE)
+                valid = False
     for l in range(num_links):
         link = pop.links[i, l]
-        assert link.from_node >= 0
-        assert link.from_node < num_nodes
-        assert link.to_node >= pop.num_inputs
-        assert link.to_node < num_nodes
+        #print('validating link', i, l, link.from_node, link.to_node, link.weight, link.deleted, link.innov)
+        if link.from_node < 0:
+            print('Validation error: link', l, ', link.from_node < 0')
+            valid = False
+        if link.from_node >= num_nodes:
+            print('Validation error: link', l, ', link.from_node >= num_nodes')
+            valid = False
+        if link.to_node < pop.num_inputs:
+            print('Validation error: link', l, ', link.to_node < pop.num_inputs')
+            valid = False
+        if link.to_node >= num_nodes:
+            print('Validation error: link', l, ', link.to_node >= num_nodes')
+            valid = False
         if not pop.is_recurrent:
-            assert link.to_node > link.from_node
-        assert not pop.nodes[i, link.from_node].deleted
-        assert not pop.nodes[i, link.to_node].deleted
-        assert link.weight >= 0.0
-        assert link.weight < 1.0
-        assert link.innov < pop.innovation_counter[None]
+            if link.to_node <= link.from_node:
+                print('Validation error: link', l, ', link.to_node <= link.from_node')
+                valid = False
+            if pop.nodes[i, link.from_node].deleted:
+                print('Validation error: link', l, ', pop.nodes[i, link.from_node].deleted')
+                valid = False
+            if pop.nodes[i, link.to_node].deleted:
+                print('Validation error: link', l, ', pop.nodes[i, link.to_node].deleted')
+                valid = False
+            if link.weight < 0.0:
+                print('Validation error: link', l, ', link.weight < 0.0')
+                valid = False
+            if link.weight > 1.0:
+                print('Validation error: link', l, ', link.weight > 1.0')
+                valid = False
+            if link.innov >= pop.innovation_counter[None]:
+                print('Validation error: link', l, ', link.innov >= pop.innovation_counter[None]')
+                valid = False
         for l2 in range(num_links):
             if l != l2:
-                assert link.innov != pop.links[i, l2].innov
+                if link.innov == pop.links[i, l2].innov:
+                    print('Validation error: link', l, ', link.innov == pop.links[i, l2].innov')
+                    valid = False
+    assert valid
 
 @ti.kernel
 def validate_all_kernel(pop: ti.template()):
@@ -188,13 +252,24 @@ def add_random_link(pop, i):
     # Actually make the link, and make sure it gets an innovation number.
     pop.new_link(i, from_node, to_node, ti.random())
 
+
+@ti.func
+def make_random_node(node_type):
+    return Node(node_type, activation_funcs.random(),
+                2 * BIAS_RANGE * ti.random() - BIAS_RANGE,
+                2 * GAIN_RANGE * ti.random() - GAIN_RANGE)
+
+
 @ti.func
 def insert_node(pop, i, n, node):
     """Add a node to a CPPN, keeping the node list sorted (slow!)."""
     num_nodes = pop.nodes[i].length()
-    # Go through the list, shifting down nodes after the insertion point,
-    # keeping track of where the block of shifted nodes begins and ends.
+    # We will shift down a contiguous block of nodes to make room for the new
+    # one, so make variables to mark the begining and end of that block.
     shift_begin, shift_end = n, n
+    # Walk along the node list, starting from the insertion point all the way
+    # to the one beyond the end of the list (one beyond because we are
+    # extending this list by one).
     for n2 in range(n, num_nodes + 1):
         shift_end = n2
         # If we've reached the end of the list, just append the last node.
@@ -213,11 +288,9 @@ def insert_node(pop, i, n, node):
     # references to nodes that got shifted.
     for l in range(pop.links[i].length()):
         link = pop.links[i, l]
-        if link.deleted:
-            continue
-        if link.from_node >= shift_begin and link.from_node < shift_end:
+        if link.from_node >= shift_begin and link.from_node <= shift_end:
             pop.links[i, l].from_node += 1
-        if link.to_node >= shift_begin and link.to_node < shift_end:
+        if link.to_node >= shift_begin and link.to_node <= shift_end:
             pop.links[i, l].to_node += 1
 
 @ti.func
@@ -227,14 +300,16 @@ def add_random_node(pop, i):
     if pop.links[i].length() == 0:
         add_random_link(pop, i)
 
-    # Select a random link and mark it as deleted.
+    # Select a random link to be split in two with the new node between the two
+    # halves.
+    # TODO: This doesn't check if the link has been deleted or not. That works,
+    # but it's a little surprising.
     l = rand_range(0, pop.links[i].length())
     old_link = pop.links[i, l]
 
     # Make a node to go between the nodes that link connected, and allocate a
     # variable for its index (to be determined below).
-    node = Node(NodeKinds.HIDDEN.value,
-                activation_funcs.random(), ti.random())
+    node = make_random_node(NodeKinds.HIDDEN.value)
     n = 0
 
     # For a recurrent network, node order doesn't matter, so just append it
@@ -249,15 +324,22 @@ def add_random_node(pop, i):
     # be worth revisiting this design.
     else:
         # Pick a place to put this node, someplace after the from_node and
-        # before the to_node (though we might take its place).
-        n = rand_range(old_link.from_node, old_link.to_node) + 1
+        # before the to_node (though we might take its place). To respect the
+        # node order invariant, the new index must be between the last input
+        # node and the first output node.
+        n = rand_range(
+            ti.max(old_link.from_node, pop.num_inputs - 1),
+            ti.min(old_link.to_node, pop.nodes[i].length() - pop.num_outputs)
+        ) + 1
         insert_node(pop, i, n, node)
 
-    # Actually delete the old link and add new links (with innovation numbers)
-    # to replace it, going to and from the new node we just added.
+    # Mark the node we chose as deleted.
     pop.links[i, l].deleted = True
-    # Update old_link in case it got modified by insert_node.
+    # Insert may have updated node indexes, so refresh our local copy of this
+    # link to make sure from_node and to_node are up to date.
     old_link = pop.links[i, l]
+    # Add new links (with new innovation numbers) linking the old from_node to
+    # the new node (with index n) to the old to_node.
     pop.new_link(i, old_link.from_node, n, old_link.weight)
     pop.new_link(i, n, old_link.to_node, 1.0)
 
@@ -268,7 +350,7 @@ def add_random_node(pop, i):
 @ti.func
 def mutate_one(pop, i):
     """Randomly choose one kind of mutation and apply it."""
-    mutation_kind = rand_range(0, 7)
+    mutation_kind = rand_range(0, 8)
 
     # Add node
     # NOTE: no mutation is applied if the CPPN is already at max size.
@@ -276,9 +358,9 @@ def mutate_one(pop, i):
         add_random_node(pop, i)
 
     # Remove node
-    # NOTE: no mutation is applied if the CPPN has no nodes.
+    # NOTE: no mutation is applied if the CPPN has no hidden nodes.
     elif mutation_kind == 1:
-        num_hidden = pop.nodes[i].length() - pop.num_inputs + pop.num_outputs
+        num_hidden = pop.nodes[i].length() - pop.num_inputs - pop.num_outputs
         if num_hidden > 0:
             n = rand_range(pop.num_inputs, pop.num_inputs + num_hidden)
             pop.nodes[i, n].deleted = True
@@ -296,21 +378,26 @@ def mutate_one(pop, i):
     # Change bias
     elif mutation_kind == 3:
         n = rand_range(0, pop.nodes[i].length())
-        pop.nodes[i, n].bias = ti.random()
+        pop.nodes[i, n].bias += ti.randn() * BIAS_RANGE
+
+    # Change gain
+    elif mutation_kind == 3:
+        n = rand_range(0, pop.nodes[i].length())
+        pop.nodes[i, n].gain = ti.randn() *  GAIN_RANGE
 
     # Add link
     # NOTE: no mutation is applied if the CPPN is already at max size.
-    elif mutation_kind == 4 and pop.has_room_for(i, nodes=0, links=1):
+    elif mutation_kind == 5 and pop.has_room_for(i, nodes=0, links=1):
         add_random_link(pop, i)
 
     # Remove link
     # NOTE: no mutation is applied if the CPPN has no links.
-    elif mutation_kind == 5 and pop.links[i].length() > 0:
+    elif mutation_kind == 6 and pop.links[i].length() > 0:
         l = rand_range(0, pop.links[i].length())
         pop.links[i, l].deleted = True
 
     # Change weight
-    elif mutation_kind == 6:
+    elif mutation_kind == 7:
         if pop.links[i].length() > 0:
             l = rand_range(0, pop.links[i].length())
             pop.links[i, l].weight = ti.random()
@@ -384,13 +471,10 @@ def random_init(pop: ti.template()):
         pop.links[ti.cast(i, int)].deactivate()
         pop.nodes[ti.cast(i, int)].deactivate()
         for _ in range(pop.num_inputs):
-            pop.nodes[i].append(
-                Node(NodeKinds.INPUT.value,
-                     activation_funcs.random(),
-                     ti.random()))
+            pop.nodes[i].append(make_random_node(NodeKinds.INPUT.value))
         for _ in range(pop.num_outputs):
-            pop.nodes[i].append(
-                Node(NodeKinds.OUTPUT.value,
-                     activation_funcs.random(),
-                     ti.random()))
-        mutate_one(pop, i)
+            pop.nodes[i].append(make_random_node(NodeKinds.OUTPUT.value))
+        # Add a randomized number of mutations to make the initial population
+        # somewhat diverse.
+        for _ in range(rand_range(1, 9)):
+            mutate_one(pop, i)

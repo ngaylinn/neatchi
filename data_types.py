@@ -25,7 +25,9 @@ class NodeKinds(Enum):
 class Node:
     kind: int
     act_func: int
-    bias: float  # TODO: Do we need bias? Do we also want gain?
+    # TODO: Does having bias and gain help?
+    bias: float
+    gain: float
     deleted: bool
 
 
@@ -33,6 +35,7 @@ def node_to_str(node):
     return (f'{NodeKinds(node.kind).name:^8}\n'
             f'{ActivationFuncs(node.act_func).name:^8}\n'
             f'b={node.bias:6.4f}\n'
+            f'g={node.gain:6.4f}\n'
             f'{"DELETED " if node.deleted else "        "}')
 
 
