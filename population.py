@@ -10,7 +10,7 @@ activation increases as the CPPNs evolve to be more complex.
 
 import taichi as ti
 
-from .data_types import Link, Node, link_to_str, node_to_str
+from .data_types import Link, link_to_str, Node, node_to_str
 
 MAX_NETWORK_SIZE = 2**8
 
@@ -90,3 +90,28 @@ class NeatPopulation:
             print(f'Individual {i}')
             self.print_one(i)
             print()
+
+    # TODO: Maybe optimize? Maybe include other CPPN metadata?
+    def get_some(self, individuals):
+        # TODO: Calling to_numpy() on a dynamic field results in an array as
+        # big as the max size of the dynamic field, with no indication of where
+        # the list of values ends. Taichi warns about this surprising behavior
+        # every time the function is called. Is there any good way to disable
+        # this? Using the Python warnings module doesn't work, sadly.
+        nodes = self.nodes.to_numpy()
+        links = self.links.to_numpy()
+        result = []
+        for i in individuals:
+            num_nodes, num_links = self.size_of(i)
+            result.append({
+                'nodes': {
+                    key: nodes[key][i, :num_nodes]
+                    for key in nodes
+                },
+                'links': {
+                    key: links[key][i, :num_links]
+                    for key in links
+                }
+            })
+        return result
+
