@@ -28,15 +28,6 @@ class Node:
     # TODO: Does having bias and gain help?
     bias: float
     gain: float
-    deleted: bool
-
-
-def node_to_str(node):
-    return (f'{NodeKinds(node.kind).name:^8}\n'
-            f'{ActivationFuncs(node.act_func).name:^8}\n'
-            f'b={node.bias:6.4f}\n'
-            f'g={node.gain:6.4f}\n'
-            f'{"DELETED " if node.deleted else "        "}')
 
 
 @ti.dataclass
@@ -44,14 +35,4 @@ class Link:
     from_node: int
     to_node: int
     weight: float
-    deleted: bool
     innov: int
-
-
-def link_to_str(link):
-    from_to = f'{link.from_node} -> {link.to_node}'
-    innov = f'i={link.innov}'
-    return (f'{from_to:^8}\n'
-            f'w={link.weight:6.4f}\n'
-            f'{innov:^8}\n'
-            f'{"DELETED " if link.deleted else "        "}')

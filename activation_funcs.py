@@ -29,7 +29,7 @@ class ActivationFuncs(Enum):
     CUBE = 12
     TRIANGLE = 13
     SAWTOOTH = 14
-    SQUARE_WAVE = 15
+    SQR_WAVE = 15
     NOTCH = 16
     STEP = 17
 
@@ -101,7 +101,7 @@ def activate_sawtooth(raw):
     return 4 * ((raw) % 0.5) - 1
 
 @ti.func
-def activate_square_wave(raw):
+def activate_sqr_wave(raw):
     return 2 * ((raw % 1) > 0.5) - 1
 
 @ti.func
@@ -147,8 +147,8 @@ def call(act_func: int, raw: float) -> float:
         return activate_triangle(raw)
     if act_func == ActivationFuncs.SAWTOOTH.value:
         return activate_sawtooth(raw)
-    if act_func == ActivationFuncs.SQUARE_WAVE.value:
-        return activate_square_wave(raw)
+    if act_func == ActivationFuncs.SQR_WAVE.value:
+        return activate_sqr_wave(raw)
     if act_func == ActivationFuncs.NOTCH.value:
         return activate_notch(raw)
     if act_func == ActivationFuncs.STEP.value:

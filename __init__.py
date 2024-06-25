@@ -1,7 +1,4 @@
-from . import actuators
-from . import neat
+from . import population
 
-Neat = neat.Neat
-ActivationMaps = actuators.ActivationMaps
-Actuators = actuators.Actuators
+NeatPopulation = population.NeatPopulation
 

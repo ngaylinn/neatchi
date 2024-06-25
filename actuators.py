@@ -18,136 +18,133 @@ import numpy as np
 import taichi as ti
 
 from . import activation_funcs
-from .population import MAX_NETWORK_SIZE
+
+MAX_NETWORK_SIZE = 200
 
 @ti.func
-def activate_network(inputs, pop, i, act_in, act_out, w, a):
-    num_nodes = pop.nodes[i].length()
-    num_links = pop.links[i].length()
+def activate_network(inputs, pop, sp, i, act, b_in, b_out, w, a):
+    num_inputs, num_outputs = ti.static(pop.network_shape)
+    num_nodes = pop.num_nodes(sp, i)
+    num_links = pop.num_links(sp, i)
 
     # Populate input node activations
-    for n in range(pop.num_inputs):
-        act_in[w, a, n] = inputs[n]
+    for n in range(num_inputs):
+        act[b_in, w, a, n] = inputs[n]
 
     # Compute activations for non-input nodes
-    for n in range(pop.num_inputs, num_nodes):
-        node = pop.nodes[i, n]
-        if not node.deleted:
-            raw = 0.0
-            for l in range(num_links):
-                link = pop.links[i, l]
-                if not link.deleted and link.to_node == n:
-                    value = act_in[w, a, link.from_node]
-                    raw += value * link.weight
-            act_out[w, a, n] = activation_funcs.call(
-                node.act_func, (node.gain * raw) + node.bias)
+    for n in range(num_inputs, num_nodes):
+        node = pop.get_node(sp, i, n)
+        raw = 0.0
+        for l in range(num_links):
+            link = pop.get_link(sp, i, l)
+            if link.to_node == n:
+                value = act[b_in, w, a, link.from_node]
+                raw += value * link.weight
+        act[b_out, w, a, n] = activation_funcs.call(
+            node.act_func, (node.gain * raw) + node.bias)
 
-    # Return a vector of the activation values for just the output nodes.
-    return ti.Vector([
-        ti.math.clamp(act_out[w, a, n], 0.0, 1.0)
-        for n in range(pop.num_inputs, pop.num_inputs + pop.num_outputs)])
+    # Copy the output nodes to a vector and return the result.
+    outputs = ti.Vector([0.0] * num_outputs)
+    for o in range(num_outputs):
+        n = num_nodes - num_outputs + o
+        outputs[o] = ti.math.clamp(act[b_out, w, a, n], 0.0, 1.0)
+    return outputs
 
 
 @ti.data_oriented
 class Actuators:
     """Activate CPPNs from a NeatPopulation."""
-    def __init__(self, num_worlds, num_activations, is_recurrent=True):
-        self.is_recurrent = is_recurrent
-        self.world_assignments = ti.field(int, shape=num_worlds)
-        # By default, assume the NeatPopulation has one individual per world
-        # and that these correspond 1:1. The caller can override this by
-        # passing alternative world assignments to update().
-        self.world_assignments.from_numpy(
-            np.arange(num_worlds, dtype=np.int32))
-        self.act = ti.field(
-            float, shape=(num_worlds, num_activations, MAX_NETWORK_SIZE))
-        if is_recurrent:
-            self.next_act = ti.field(
-                float, shape=(num_worlds, num_activations, MAX_NETWORK_SIZE))
-        else:
-            self.next_act = self.act
+    def __init__(self, num_worlds, num_activations, pop):
+        self.pop = pop
 
-    def update(self, world_assignments=None):
-        """Update the population CPPNs and world assignments for activation."""
-        if world_assignments is not None:
-            self.world_assignments.from_numpy(world_assignments)
-        # If this is a recurrent network, clear out the activation buffer to
-        # make sure state from the last population doesn't leak into this one.
-        # For a non-recurrent network, the full conents of this buffer are
-        # never read, and always overwritten on each call to activate, so
-        # there's no need.
-        if self.is_recurrent:
-            self.act.fill(0.0)
+        # Actuators computes num_activations parallel activations of the CPPNs
+        # in pop for each of num_worlds parallel simulations. By default, we
+        # assume that there is one world for each individual in the population,
+        # but this can be overridden by the caller by setting world_assignments
+        # manually.
+        self.world_assignments = ti.Vector.field(
+            n=2, dtype=int, shape=num_worlds)
+        self.world_assignments.from_numpy(
+            np.array(list(np.ndindex(pop.population_shape)), dtype=np.int32))
+
+        # Allocate activation buffers for all these parallel CPNNs. A recurrent
+        # network needs a double buffer to track the activations from the last
+        # time step.
+        buffer_count = 1 + pop.is_recurrent
+        self.act = ti.field(float, shape=(
+            buffer_count, num_worlds, num_activations, MAX_NETWORK_SIZE))
+
+    def reset(self):
+        self.act.fill(0.0)
 
     @ti.func
-    def activate(self, inputs, pop, w, a):
+    def activate(self, inputs, w, a):
         """Activate this CPPN and return its output value(s).
 
         w is the world_index, indicating which CPPN in the population to use.
         a is the activation index, used to allow multiple parallel activations.
         """
-        result = ti.Vector([0.0] * pop.num_outputs)
-        i = self.world_assignments[w]
-        result = activate_network(
-            inputs, pop, i, self.act, self.next_act, w, a)
-        return result
-
-    def finalize_activation(self):
-        """Call after all calls to activate() in one time step are done."""
-        if ti.static(self.is_recurrent):
-            # Once all the activations have been computed, swap the activation
-            # buffers so that the last set of outputs serves as inputs in the
-            # next activation.
-            self.act, self.next_act = self.next_act, self.act
+        sp, i = self.world_assignments[w]
+        b_in, b_out = 0, 0
+        if ti.static(self.pop.is_recurrent):
+            b_in = self.pop.buffer_index[None]
+            b_out = 1 - b_in
+        return activate_network(
+            inputs, self.pop, sp, i, self.act, b_in, b_out, w, a)
 
 
 @ti.data_oriented
 class ActivationMaps:
     """Generate maps of activation values for CPPNs from a NeatPopulation."""
-    def __init__(self, num_worlds, num_individuals, map_size):
+    def __init__(self, num_worlds, map_size, pop):
         self.map_size = map_size
-        self.world_assignments = ti.field(int, shape=num_worlds)
-        # By default, assume the NeatPopulation has one individual per world
-        # and that these correspond 1:1. The caller can override this by
-        # passing alternative world assignments to update().
+        self.pop = pop
+
+        # ActivationMaps renders a map_size x map_size image for every CPPN in
+        # pop across num_worlds parallel simulations. By default, we assume
+        # there is one world for each individual in the population, but this
+        # can be overridden by the caller by setting world_assignments
+        # manually.
+        self.world_assignments = ti.Vector.field(
+            n=2, dtype=int, shape=num_worlds)
         self.world_assignments.from_numpy(
-            np.arange(num_worlds, dtype=np.int32))
+            np.array(list(np.ndindex(pop.population_shape)), dtype=np.int32))
+
+        # Activation buffer for activating all those CPPNs in parallel. We have
+        # one for every row of every map.
+        num_maps = pop.population_shape[0] * pop.population_shape[1]
         self.act = ti.field(
-            float, shape=(num_individuals, map_size, MAX_NETWORK_SIZE))
+            float, shape=(1, num_maps, map_size, MAX_NETWORK_SIZE))
+
+        # Rendered maps of activations across 2D space.
         self.maps = ti.field(
-            float, shape=(num_individuals, map_size, map_size))
+            float, shape=pop.population_shape + (map_size, map_size))
 
     @ti.kernel
-    def render_kernel(self):
-        for i, r in ti.ndrange(self.pop.num_individuals, self.map_size):
+    def render(self):
+        map_rows = self.pop.population_shape + (self.map_size,)
+        for sp, i, r in ti.ndrange(*map_rows):
             for c in range(self.map_size):
+                m = sp * i 
                 inputs = ti.Vector([r / self.map_size, c / self.map_size])
                 # TODO: Support more than one output channel.
-                self.maps[i, r, c] = activate_network(
-                    inputs, self.pop, i, self.act, self.act, i, r)[0]
-
-    # TODO: This doesn't work. render_kernel() doesn't see the updated
-    # references, so you have to pass pop each time!
-    def update(self, pop, world_assignments=None):
-        """Update the population CPPNs and world assignments for activation."""
-        self.pop = pop
-        if world_assignments is not None:
-            self.world_assignments.from_numpy(world_assignments)
-        self.render_kernel()
+                self.maps[sp, i, r, c] = activate_network(
+                    inputs, self.pop, sp, i, self.act, 0, 0, m, r)[0]
 
     @ti.kernel
-    def get_one_kernel(self, i: int, output: ti.types.ndarray()):
+    def get_one_kernel(self, w: int, output: ti.types.ndarray()):
+        sp, i = self.world_assignments[w]
         for r, c, in ti.ndrange(self.map_size, self.map_size):
-            output[r, c] = self.maps[i, r, c]
+            output[r, c] = self.maps[sp, i, r, c]
 
     def get_one(self, w):
         """Return a single rendered ActivationMap for the given world."""
         result = np.zeros((self.map_size, self.map_size))
-        self.get_one_kernel(self.world_assignments[w], result)
+        self.get_one_kernel(w, result)
         return result
 
     @ti.func
-    def lookup(self, world_assignments, w, x, y):
+    def lookup(self, w, r, c):
         """Lookup the activation value for some map location in some world."""
-        i = self.world_assignments[w]
-        return self.maps[i, x, y]
+        sp, i = self.world_assignments[w]
+        return self.maps[sp, i, r, c]
