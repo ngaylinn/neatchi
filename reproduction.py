@@ -26,8 +26,8 @@ from . import activation_funcs
 from . import population
 from .data_types import Node, NodeKinds, Link
 
+MAX_INITIAL_MUTATIONS = 8
 MUTATION_RATE = 0.01
-CROSSOVER_RATE = 0.6
 
 NONE = -1
 
@@ -35,17 +35,6 @@ NONE = -1
 BIAS_RANGE = 1.0
 GAIN_RANGE = 8.0
 WEIGHT_RANGE = 1.0
-
-# Constants for testing compatibility between two individuals in a Population.
-# TODO: Tune these!
-# TODO: Maybe compute compatibility pairwise for many individuals, so that
-# selection can pick a compatible mate rather than merely filtering out
-# incompatible selections after the fact.
-# TODO: Capture and report compatibility / diversity metrics for the
-# population?
-DISJOINT_COEFF = 1.0
-WEIGHT_COEFF = 1.0
-COMPATIBILITY_THRESHOLD = 1.0
 
 @ti.func
 def rand_range(min_val, max_val):
@@ -57,12 +46,11 @@ def rand_range(min_val, max_val):
 def add_random_link(pop, sp, i):
     """Add a random link to the specified CPPN as a new innovation."""
     num_nodes = pop.num_nodes(sp, i)
-    num_inputs = ti.static(pop.network_shape[0])
 
     from_node, to_node = 0, 0
     # Make sure from_node < to_node and disallow links to input nodes.
     from_node = rand_range(0, num_nodes - 1)
-    to_node = rand_range(ti.max(from_node + 1, num_inputs), num_nodes)
+    to_node = rand_range(ti.max(from_node + 1, pop.num_inputs), num_nodes)
 
     # Actually make the link, and make sure it gets an innovation number.
     pop.add_link(sp, i, Link(from_node, to_node, ti.random()))
@@ -99,10 +87,9 @@ def add_random_node(pop, sp, i):
     # before the to_node (though we might take its place). To respect the
     # node order invariant, the new index must be between the last input
     # node and the first output node.
-    num_inputs, num_outputs = ti.static(pop.network_shape)
     n = rand_range(
-        ti.max(old_link.from_node, num_inputs - 1),
-        ti.min(old_link.to_node, pop.num_nodes(sp, i) - num_outputs)
+        ti.max(old_link.from_node, pop.num_inputs - 1),
+        ti.min(old_link.to_node, pop.num_nodes(sp, i) - pop.num_outputs)
     ) + 1
     pop.insert_node(sp, i, n, node)
 
@@ -135,10 +122,9 @@ def mutate_one(pop, sp, i):
     # Remove node
     # NOTE: no mutation is applied if the CPPN has no hidden nodes.
     elif mutation_kind == 1:
-        num_inputs, num_outputs = ti.static(pop.network_shape)
-        num_hidden = pop.num_nodes(sp, i) - num_inputs - num_outputs
+        num_hidden = pop.num_nodes(sp, i) - pop.num_inputs - pop.num_outputs
         if num_hidden > 0:
-            n = rand_range(num_inputs, num_inputs + num_hidden)
+            n = rand_range(pop.num_inputs, pop.num_inputs + num_hidden)
             pop.delete_node(sp, i, n)
 
     # Change activation
@@ -193,8 +179,7 @@ def mutate_one(pop, sp, i):
 
 
 @ti.func
-def get_mate_link(pop, matches, sp, i, pl):
-    p, m = matches[sp, i]
+def get_mate_link(pop, sp, p, pl, m):
     ml = NONE
     # Grab the indicated link from parent, then go through all links in mate
     # and if one has the same innovation number, that's the result.
@@ -208,57 +193,15 @@ def get_mate_link(pop, matches, sp, i, pl):
 
 
 @ti.func
-def is_compatible(pop, sp, i, matches):
-    """Returns True iff parent and mate are similar enough to breed."""
-    num_disjoint = 0
-    num_total = 0
-    weight_delta = 0.0
-
-    # TODO: Note that we compute this currently is asymmetrical. The
-    # compatibility of (parent, mate) != (mate, parent). This will change soon
-    # when I redesign this to compute compatibility for all pairs.
-    p, m = matches[sp, i]
-    for pl in range(pop.num_links(sp, p)):
-        ml = get_mate_link(pop, matches, sp, i, pl)
-        # If both parent and mate have this link, compare their weights.
-        if ml != NONE:
-            num_total += 1
-            weight_delta += ti.abs(
-                pop.get_link(sp, p, pl).weight -
-                pop.get_link(sp, m, ml).weight)
-
-        # If just one of parent and mate have this link, it's "disjoint." The
-        # original NEAT algorithm discriminates between "disjoint" and "excess"
-        # genes, but here we treat them all the same.
-        else:
-            num_total += 1
-            num_disjoint += 1
-
-    return ((DISJOINT_COEFF * num_disjoint / num_total) +
-            (WEIGHT_COEFF * weight_delta)) < COMPATIBILITY_THRESHOLD
-
-
-@ti.func
-def should_crossover(pop, sp, i, matches):
-    p, m = matches[sp, i]
-    # Reproduction is asexual by default, but if selection chose a distinct
-    # parent and mate, they are compatible with each other, and luck is on
-    # their side, then perform sexual reproduction with crossover.
-    result = False
-    if p != m and ti.random() < CROSSOVER_RATE:
-        result = is_compatible(pop, sp, i, matches)
-    return result
-
-
-@ti.func
-def crossover(pop, sp, i, matches):
+def crossover(pop, sp, i, p, m):
     b_out = 1 - pop.buffer_index[None]
-    p, m = matches[sp, i]
 
-    # Copy nodes from parent to child. Note that if mate has nodes that parent
-    # doesn't, they won't be copied. This is safe because we only take links
-    # from mate that have corresponding links in parent, which means they will
-    # never refer to a node that parent doesn't have.
+    # Initialize this individual's node list from the parent. If the mate has
+    # nodes the parent doesn't, they won't be copied. This is safe because we
+    # only take links from mate that have corresponding links in parent, which
+    # means they will never refer to a node that parent doesn't have. We may
+    # copy nodes from mate but that happens when we traverse the link list,
+    # because that's the only way to know which nodes correspond to each other.
     num_nodes = pop.num_nodes(sp, p)
     pop.node_lens[b_out, sp, i] = num_nodes
     for n in range(num_nodes):
@@ -269,22 +212,33 @@ def crossover(pop, sp, i, matches):
     pop.link_lens[b_out, sp, i] = num_links
     for l in range(num_links):
         pl = l
-        link = pop.get_link(sp, p, pl)
+        p_link = pop.get_link(sp, p, pl)
+        link = p_link
 
-        # If the mate has a corresponding link, flip a coin to decide which
-        # link weight to use.
-        ml = get_mate_link(pop, matches, sp, i, pl)
+        # If the mate has a corresponding link, flip a coin to decide whether
+        # we should crossover that link and its corresponding to_node.
+        ml = get_mate_link(pop, sp, p, pl, m)
         if ml != NONE and ti.random(dtype=int) % 2:
-            link.weight = pop.get_link(sp, m, ml).weight
+            # Copy the link weight from mate to parent. Node indices may not
+            # match, so leave those unchanged.
+            m_link = pop.get_link(sp, m, ml)
+            link.weight = m_link.weight
+
+            # Also copy over the associated to_node. If the links have the same
+            # innovation number, then their associated nodes should also be
+            # corresponding, even though they may have different indices.
+            # TODO: Should I also copy the from_node? Feels a little arbitrary.
+            pn = p_link.to_node
+            mn = m_link.to_node
+            pop.nodes[b_out, sp, i, pn] = pop.get_node(sp, m, mn)
 
         # Fill in this link, using the copy from either parent or mate.
         pop.links[b_out, sp, i, l] = link
 
 
 @ti.func
-def clone(pop, sp, i, matches):
+def clone(pop, sp, i, p):
     b_out = 1 - pop.buffer_index[None]
-    p, _ = matches[sp, i]
 
     num_nodes = pop.num_nodes(sp, p)
     pop.node_lens[b_out, sp, i] = num_nodes
@@ -298,14 +252,15 @@ def clone(pop, sp, i, matches):
 
 
 @ti.kernel
-def propagate(pop: ti.template(), matches: ti.template()):
-    # Generate each individual in the new population, generate one from the old
-    # population, either by cloning or crossover.
+def propagate(pop: ti.template()):
+    # Generate each individual in each new sub population, generate one from
+    # the old sub population, either by cloning or crossover.
     for sp, i in ti.ndrange(*pop.population_shape):
-        if should_crossover(pop, sp, i, matches):
-            crossover(pop, sp, i, matches)
+        p, m = pop.matches[sp, i]
+        if m == NONE:
+            clone(pop, sp, i, p)
         else:
-            clone(pop, sp, i, matches)
+            crossover(pop, sp, i, p, m)
     # After this function is completed, the population object will rotate its
     # double buffer and call mutate_all().
 
@@ -322,12 +277,11 @@ def random_init(pop: ti.template()):
     # Generate a population of individuals with no hidden nodes, random
     # activation functions, and one random mutation each.
     for sp, i in ti.ndrange(*pop.population_shape):
-        num_inputs, num_outputs = ti.static(pop.network_shape)
-        for n in range(num_inputs):
+        for n in range(pop.num_inputs):
             pop.insert_node(sp, i, n, make_random_node(NodeKinds.INPUT.value))
-        for n in range(num_inputs, num_inputs + num_outputs):
+        for n in range(pop.num_inputs, pop.num_inputs + pop.num_outputs):
             pop.insert_node(sp, i, n, make_random_node(NodeKinds.OUTPUT.value))
         # Add a randomized number of mutations to make the initial population
         # somewhat diverse.
-        for _ in range(rand_range(1, 9)):
+        for _ in range(rand_range(1, MAX_INITIAL_MUTATIONS + 1)):
             mutate_one(pop, sp, i)

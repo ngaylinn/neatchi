@@ -23,16 +23,15 @@ MAX_NETWORK_SIZE = 200
 
 @ti.func
 def activate_network(inputs, pop, sp, i, act, b_in, b_out, w, a):
-    num_inputs, num_outputs = ti.static(pop.network_shape)
     num_nodes = pop.num_nodes(sp, i)
     num_links = pop.num_links(sp, i)
 
     # Populate input node activations
-    for n in range(num_inputs):
+    for n in range(pop.num_inputs):
         act[b_in, w, a, n] = inputs[n]
 
     # Compute activations for non-input nodes
-    for n in range(num_inputs, num_nodes):
+    for n in range(pop.num_inputs, num_nodes):
         node = pop.get_node(sp, i, n)
         raw = 0.0
         for l in range(num_links):
@@ -44,9 +43,9 @@ def activate_network(inputs, pop, sp, i, act, b_in, b_out, w, a):
             node.act_func, (node.gain * raw) + node.bias)
 
     # Copy the output nodes to a vector and return the result.
-    outputs = ti.Vector([0.0] * num_outputs)
-    for o in range(num_outputs):
-        n = num_nodes - num_outputs + o
+    outputs = ti.Vector([0.0] * pop.num_outputs)
+    for o in range(pop.num_outputs):
+        n = num_nodes - pop.num_outputs + o
         outputs[o] = ti.math.clamp(act[b_out, w, a, n], 0.0, 1.0)
     return outputs
 

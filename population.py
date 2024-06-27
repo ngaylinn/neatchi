@@ -13,28 +13,55 @@ import taichi as ti
 from .actuators import ActivationMaps, Actuators, MAX_NETWORK_SIZE
 from .data_types import Link, Node
 from . import reproduction
+from . import selection
 from .validation import validate_all
 
 @ti.data_oriented
 class NeatPopulation:
     def __init__(self, population_shape, network_shape, is_recurrent):
         self.population_shape = population_shape
-        self.network_shape = network_shape
+        self.num_sub_pops, self.num_individuals = population_shape
+        self.num_inputs, self.num_outputs = network_shape
         self.is_recurrent = is_recurrent
+
+        # Used to track when links were added to aid in crossover.
         self.innovation_counter = ti.field(dtype=int, shape=())
+
+        # Used to manage a double buffer of CPPNs: one for the current
+        # generation, and one for the generation produced during propagation.
         self.buffer_index = ti.field(dtype=int, shape=())
+        NUM_BUFFERS = 2
 
-        # It's a shame, but Taichi's dynamic fields are just too awkward to use
-        # the way I want here. So, I'm implementing list-like behavior
+        # Allocate fields to track the node and link lists for every CPPN in
+        # the population.
+        # NOTE: It's a shame, but Taichi's dynamic fields are just too awkward
+        # to use the way I want here. So, I'm implementing list-like behavior
         # manually.
-        buffer_shape = (2,) + population_shape
-        self.nodes = Node.field(shape=buffer_shape + (MAX_NETWORK_SIZE,))
-        self.node_lens = ti.field(int, shape=buffer_shape)
-        self.links = Link.field(shape=buffer_shape + (MAX_NETWORK_SIZE,))
-        self.link_lens = ti.field(int, shape=buffer_shape)
+        # NOTE: This is inefficient and ill-suited to the GPU, but still much
+        # better than doing this work on the CPU.
+        self.nodes = Node.field(
+            shape=(NUM_BUFFERS, self.num_sub_pops, self.num_individuals,
+                   MAX_NETWORK_SIZE))
+        self.node_lens = ti.field(int,
+            shape=(NUM_BUFFERS, self.num_sub_pops, self.num_individuals))
 
+        self.links = Link.field(
+            shape=(NUM_BUFFERS, self.num_sub_pops, self.num_individuals,
+                   MAX_NETWORK_SIZE))
+        self.link_lens = ti.field(int,
+            shape=(NUM_BUFFERS, self.num_sub_pops, self.num_individuals))
+
+        # Fields for pairwise compatibility and the diversity metric.
+        self.comp_matrix = ti.field(float,
+            shape=(self.num_sub_pops, self.num_individuals, self.num_individuals))
+        self.comp_matrix.fill(ti.math.nan) # For the main diagonals.
+        self.diversity = ti.field(float, shape=(self.num_sub_pops))
+
+        # Fields for fitness and selection.
+        self.fitness = ti.field(int, shape=population_shape)
         self.matches = ti.Vector.field(n=2, dtype=int, shape=population_shape)
 
+        # An Actuators object for this population, created on demand.
         self.actuators = None
 
     # -------------------------------------------------------------------------
@@ -49,25 +76,32 @@ class NeatPopulation:
         return ActivationMaps(num_worlds, map_size, self)
 
     def randomize(self):
+        # Initialize all the CPPNs
         self.node_lens.fill(0)
         self.link_lens.fill(0)
         reproduction.random_init(self)
 
-        # Uncomment for debugging:
+        # For debugging, make sure all the new CPPNs are valid.
         # validate_all(self)
+
+        # Compute compatibility / diversity for the new population
+        selection.analyze_compatibility(self)
 
         # Every time the population gets updated, we invalidate the activation
         # history in any actuators that got created. This only matters for
-        # reucrrent networks, since non-recurrent ones have no history.
+        # recurrent networks, since non-recurrent ones have no history.
         if self.actuators and self.is_recurrent:
             self.actuators.reset()
 
-    def propagate(self, matches):
-        self.matches.from_numpy(matches)
+    def propagate(self):
+        # NOTE: The caller must set self.fitenss before calling propagate.
+
+        # Perform selection across all sub-populations.
+        selection.tournament_select(self)
 
         # Fill the unused population buffer with a new generation drawn from
         # the current population buffer, possibly with crossover.
-        reproduction.propagate(self, self.matches)
+        reproduction.propagate(self)
 
         # Swap the buffers to make the new generation current, then mutate that
         # generation. This is done after the propagate step so that the code
@@ -75,8 +109,11 @@ class NeatPopulation:
         self.buffer_index[None] = 1 - self.buffer_index[None]
         reproduction.mutate_all(self)
 
-        # Uncomment for debugging:
+        # For debugging, make sure all the new CPPNs are valid.
         # validate_all(self)
+
+        # Compute compatibility / diversity for the new population
+        selection.analyze_compatibility(self)
 
         # Every time the population gets updated, we invalidate the activation
         # history in any actuators that got created. This only matters for

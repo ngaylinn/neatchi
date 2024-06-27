@@ -58,7 +58,6 @@ def validate(pop: ti.template(), sp: int, i: int) -> bool:
     """
     num_nodes = pop.num_nodes(sp, i)
     num_links = pop.num_links(sp, i)
-    num_inputs, num_outputs = ti.static(pop.network_shape)
     valid = True
     if num_nodes < 0 or num_nodes >= MAX_NETWORK_SIZE:
         print(f'Expected num_nodes 0 <= ({num_nodes}) < MAX_NETWORK_SIZE')
@@ -68,17 +67,17 @@ def validate(pop: ti.template(), sp: int, i: int) -> bool:
         valid = False
     for n in range(num_nodes):
         node = pop.get_node(sp, i, n)
-        if n < num_inputs:
+        if n < pop.num_inputs:
             if node.kind != NodeKinds.INPUT.value:
-                print(f'The first {num_inputs} nodes should have type INPUT')
+                print(f'The first {pop.num_inputs} nodes should have type INPUT')
                 valid = False
-        elif n < num_nodes - num_outputs:
+        elif n < num_nodes - pop.num_outputs:
             if node.kind != NodeKinds.HIDDEN.value:
                 print(f'Node {n} should have type HIDDEN')
                 valid = False
         else:
             if node.kind != NodeKinds.OUTPUT.value:
-                print(f'The last {num_outputs} nodes should have type OUTPUT')
+                print(f'The last {pop.num_outputs} nodes should have type OUTPUT')
                 valid = False
             if node.act_func < 0 or node.act_func >= NUM_ACTIVATION_FUNCS:
                 print(f'Node {n} has an invalid activation function')
@@ -94,7 +93,7 @@ def validate(pop: ti.template(), sp: int, i: int) -> bool:
         if link.from_node < 0 or link.from_node >= num_nodes:
             print(f'Link {l} has from_node out of range')
             valid = False
-        if link.to_node < num_inputs:
+        if link.to_node < pop.num_inputs:
             print(f'Link {l} cannot have an INPUT to_node')
             valid = False
         if link.to_node >= num_nodes:
