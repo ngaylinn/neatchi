@@ -9,6 +9,9 @@ WEIGHT_COEFF = 0.4
 COMP_THRESHOLD = 3.0
 EPSILON = 1e-8
 
+# The number of individuals to consider in selection. The minimum value is 1.0
+# which indicates fully random selection. The higher this goes, the more strict
+# the selection will be.
 TOURNAMENT_SIZE = 2
 CROSSOVER_RATE = 0.6
 
@@ -42,8 +45,9 @@ def is_compatible(pop, sp, p, m):
             # between "disjoint" and "excess" genes, but we don't.
             else:
                 num_disjoint += 1
-    return (DISJOINT_COEFF * num_disjoint / (EPSILON + largest_num_links) +
-            WEIGHT_COEFF * weight_delta / (EPSILON + num_common_weights))
+    return float(
+        DISJOINT_COEFF * num_disjoint / (EPSILON + largest_num_links) +
+        WEIGHT_COEFF * weight_delta / (EPSILON + num_common_weights))
 
 
 @ti.kernel
@@ -89,10 +93,17 @@ def tournament_select(pop: ti.template()):
         p = NONE
         m = NONE
 
+        # Uncomment to support fractional tournament sizes by picking some
+        # integer value between floor() and ceil() of TOURNAMENT_SIZE with
+        # probabily determined by the fractional part of TOURNAMENT_SIZE.
+        tournament_size = TOURNAMENT_SIZE # (
+        #    (ti.random() < TOURNAMENT_SIZE % 1.0) +
+        #    int(TOURNAMENT_SIZE))
+
         # Consider TOURNAMENT_SIZE candidates and choose the most fit one to be
         # the parent in this match.
         p_fitness = -ti.math.inf
-        for _ in range(TOURNAMENT_SIZE):
+        for _ in range(tournament_size):
             c = rand_range(0, pop.num_individuals)
             # Compare log fitness to encourage diversity.
             c_fitness = pop.fitness[sp, c]
@@ -114,7 +125,7 @@ def tournament_select(pop: ti.template()):
             # If there are compatible mates, hold a tournament to pick one.
             if num_compatible_mates > 0:
                 m_fitness = -ti.math.inf
-                for _ in range(TOURNAMENT_SIZE):
+                for _ in range(tournament_size):
                     # Pick one of the compatible mates at random. Note, this is
                     # not an array index, it's the number of valid mates to
                     # skip before we get to our selected candidate.
