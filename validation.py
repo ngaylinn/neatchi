@@ -1,9 +1,8 @@
 import numpy as np
 import taichi as ti
 
-from .data_types import NodeKinds
+from .data_types import NodeKinds, MAX_NETWORK_SIZE
 from .activation_funcs import ActivationFuncs, NUM_ACTIVATION_FUNCS
-from .actuators import MAX_NETWORK_SIZE
 from .reproduction import BIAS_RANGE, GAIN_RANGE, WEIGHT_RANGE
 
 

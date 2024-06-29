@@ -8,11 +8,13 @@ as the CPPNs evolve. This means that the time spent on reproduction and
 activation increases as the CPPNs evolve to be more complex.
 """
 
+import numpy as np
 import taichi as ti
 
-from .actuators import ActivationMaps, Actuators, MAX_NETWORK_SIZE
-from .data_types import Link, Node
+from .actuators import ActivationMaps, Actuators
+from .data_types import EMPTY_CPPN, Link, Node, cppn_dtype, MAX_NETWORK_SIZE
 from . import reproduction
+from .reproduction import NONE
 from . import selection
 from .validation import validate_all
 
@@ -75,11 +77,18 @@ class NeatPopulation:
     def make_activation_maps(self, num_worlds, map_size):
         return ActivationMaps(num_worlds, map_size, self)
 
-    def randomize(self):
-        # Initialize all the CPPNs
-        self.node_lens.fill(0)
-        self.link_lens.fill(0)
+    def randomize(self, elites=None):
+        # Rotate the population buffer so that the previous population won't be
+        # clobbered and we can copy elites from there.
+        self.buffer_index[None] = 1 - self.buffer_index[None]
+
+        # Initialize all the CPPNs in the current generation.
+        self.clear()
         reproduction.random_init(self)
+
+        # Copy back the elites from the previous population.
+        if elites is not None:
+            self.restore_elites(elites)
 
         # For debugging, make sure all the new CPPNs are valid.
         # validate_all(self)
@@ -94,7 +103,7 @@ class NeatPopulation:
             self.actuators.reset()
 
     def propagate(self):
-        # NOTE: The caller must set self.fitenss before calling propagate.
+        # NOTE: The caller must set self.fitness before calling propagate.
 
         # Perform selection across all sub-populations.
         selection.tournament_select(self)
@@ -121,24 +130,20 @@ class NeatPopulation:
         if self.actuators and self.is_recurrent:
             self.actuators.reset()
 
-    def get_cppns(self, individuals):
+    def get_cppns(self):
         b = self.buffer_index[None]
         nodes = self.nodes.to_numpy()
         links = self.links.to_numpy()
-        result = []
-        for sp, i in individuals:
+        result = np.full(self.population_shape, EMPTY_CPPN)
+        for sp, i in ti.ndrange(*self.population_shape):
             num_nodes = self.node_lens[b, sp, i]
             num_links = self.link_lens[b, sp, i]
-            result.append({
-                'nodes': {
-                    key: nodes[key][b, sp, i, :num_nodes]
-                    for key in nodes
-                },
-                'links': {
-                    key: links[key][b, sp, i, :num_links]
-                    for key in links
-                }
-            })
+            for key, data in nodes.items():
+                result[sp, i]['nodes'][key][:num_nodes] = \
+                        data[b, sp, i, :num_nodes]
+            for key, data in links.items():
+                result[sp, i]['links'][key][:num_links] = \
+                        data[b, sp, i, :num_links]
         return result
 
     # -------------------------------------------------------------------------
@@ -267,7 +272,34 @@ class NeatPopulation:
     # Internal API: Other
     # -------------------------------------------------------------------------
 
+    @ti.kernel
+    def clear(self):
+        # Reset all the node and link lists to empty for the current population
+        # buffer only.
+        b = self.buffer_index[None]
+        for sp, i in ti.ndrange(*self.population_shape):
+            self.node_lens[b, sp, i] = 0
+            self.link_lens[b, sp, i] = 0
+
     @ti.func
     def has_room_for(self, sp, i, nodes, links):
         return (self.num_nodes(sp, i) + nodes < MAX_NETWORK_SIZE and
                 self.num_nodes(sp, i) + links < MAX_NETWORK_SIZE)
+
+    @ti.kernel
+    def restore_elites(self, elites: ti.types.ndarray(dtype=ti.int32, ndim=2)):
+        b_curr = self.buffer_index[None]
+        b_prev = 1 - b_curr
+        # Copy the full network from the previous buffer to the current one,
+        # overriding whatever was generated from the usual breeding program.
+        for e, x in ti.ndrange(elites.shape[0], MAX_NETWORK_SIZE):
+            sp, i = elites[e, 0], elites[e, 1]
+            self.nodes[b_curr, sp, i, x] = self.nodes[b_prev, sp, i, x]
+            self.links[b_curr, sp, i, x] = self.links[b_prev, sp, i, x]
+
+            # Also update the match-making records and list lengths to reflect
+            # this change. This only needs to happen once per individual.
+            if x == 0:
+                self.matches[sp, i] = (i, NONE)
+                self.node_lens[b_curr, sp, i] = self.node_lens[b_prev, sp, i]
+                self.link_lens[b_curr, sp, i] = self.link_lens[b_prev, sp, i]

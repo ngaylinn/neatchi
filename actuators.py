@@ -18,8 +18,7 @@ import numpy as np
 import taichi as ti
 
 from . import activation_funcs
-
-MAX_NETWORK_SIZE = 200
+from .data_types import MAX_NETWORK_SIZE
 
 @ti.func
 def activate_network(inputs, pop, sp, i, act, b_in, b_out, w, a):

@@ -11,7 +11,10 @@ regularly clear out all deleted nodes.
 
 from enum import Enum
 
+import numpy as np
 import taichi as ti
+
+MAX_NETWORK_SIZE = 200
 
 from .activation_funcs import ActivationFuncs
 
@@ -36,3 +39,26 @@ class Link:
     to_node: int
     weight: float
     innov: int
+
+
+cppn_dtype = np.dtype([
+    ('nodes', np.dtype([
+        ('kind', np.int32),
+        ('act_func', np.int32),
+        ('bias', np.float32),
+        ('gain', np.float32)
+    ]), MAX_NETWORK_SIZE),
+    ('links', np.dtype([
+        ('from_node', np.int32),
+        ('to_node', np.int32),
+        ('weight', np.float32),
+        ('innov', np.int32)
+    ]), MAX_NETWORK_SIZE)
+])
+
+
+EMPTY_CPPN = np.array(
+    [([(-1, -1, np.nan, np.nan)] * MAX_NETWORK_SIZE,
+      [(-1, -1, np.nan, -1)] * MAX_NETWORK_SIZE)],
+    dtype=cppn_dtype
+)
