@@ -6,17 +6,12 @@ from .reproduction import rand_range, NONE
 # Constants for testing compatibility between two individuals in a Population.
 DISJOINT_COEFF = 1.0
 WEIGHT_COEFF = 0.4
-COMP_THRESHOLD = 3.0
 EPSILON = 1e-8
 
-# The number of individuals to consider in selection. The minimum value is 1.0
-# which indicates fully random selection. The higher this goes, the more strict
-# the selection will be.
-TOURNAMENT_SIZE = 2
 CROSSOVER_RATE = 0.6
 
 @ti.func
-def is_compatible(pop, sp, p, m):
+def get_compatibility(pop, sp, p, m):
     num_disjoint = 0
     weight_delta = 0.0
     num_common_weights = 0
@@ -58,23 +53,24 @@ def analyze_compatibility(pop: ti.template()):
     # fill (half the matrix minus the main diagonal, which is unfilled).
     triangle_size = int(((pop.num_individuals - 1) / 2) * pop.num_individuals)
     for sp, tri in ti.ndrange(pop.num_sub_pops, triangle_size):
-        # Identify the row and column this thread should fill.
-        col = tri % pop.num_individuals
-        row = tri // pop.num_individuals
+        # Identify the row and column this thread should fill (ie, which
+        # potential parents to compute compatibility for).
+        p = tri // pop.num_individuals
+        m = tri % pop.num_individuals
 
         # If this would compute a cell in the lower triangle of the matrix, use a
         # a position on the opposite side of the upper triangle instead.
-        if row >= col:
-            row = pop.num_individuals - row - 2
-            col = pop.num_individuals - col - 1
+        if p >= m:
+            p = pop.num_individuals - p - 2
+            m = pop.num_individuals - m - 1
 
         # For convenience, fill both side of the matrix. We have to allocate
         # this much space anyway, so the only thing that really matters for
         # performance is that we avoid recomputing symmetric values. Note that
         # the main diagonal of the matrix is not populated.
-        compatibility = is_compatible(pop, sp, row, col)
-        pop.comp_matrix[sp, row, col] = compatibility
-        pop.comp_matrix[sp, col, row] = compatibility
+        compatibility = 0.0 # get_compatibility(pop, sp, p, m)
+        pop.comp_matrix[sp, p, m] = compatibility
+        pop.comp_matrix[sp, m, p] = compatibility
 
         # Sum compatibility for all pairs of individuals in this sub-population
         # (Taichi should automatically optimize this reduction).
@@ -86,7 +82,8 @@ def analyze_compatibility(pop: ti.template()):
 
 
 @ti.kernel
-def tournament_select(pop: ti.template()):
+def tournament_select_kernel(pop: ti.template(), tournament_size: int,
+                             comp_threshold: float):
     # For all individuals in each sub_population, pick its parent(s).
     for sp, i in ti.ndrange(*pop.population_shape):
         # Parent and mate indices for this matchup.
@@ -96,9 +93,9 @@ def tournament_select(pop: ti.template()):
         # Uncomment to support fractional tournament sizes by picking some
         # integer value between floor() and ceil() of TOURNAMENT_SIZE with
         # probabily determined by the fractional part of TOURNAMENT_SIZE.
-        tournament_size = TOURNAMENT_SIZE # (
-        #    (ti.random() < TOURNAMENT_SIZE % 1.0) +
-        #    int(TOURNAMENT_SIZE))
+        #tournament_size = (
+        #    (ti.random() < tournament_size % 1.0) +
+        #    int(tournament_size))
 
         # Consider TOURNAMENT_SIZE candidates and choose the most fit one to be
         # the parent in this match.
@@ -119,7 +116,7 @@ def tournament_select(pop: ti.template()):
             # twice rather than saving the results to save memory.
             num_compatible_mates = 0
             for c in range(pop.num_individuals):
-                if pop.comp_matrix[sp, p, c] < COMP_THRESHOLD:
+                if pop.comp_matrix[sp, p, c] < comp_threshold:
                     num_compatible_mates += 1
 
             # If there are compatible mates, hold a tournament to pick one.
@@ -131,7 +128,7 @@ def tournament_select(pop: ti.template()):
                     # skip before we get to our selected candidate.
                     nth_candidate = rand_range(0, num_compatible_mates)
                     for c in range(pop.num_individuals):
-                        if pop.comp_matrix[sp, p, c] < COMP_THRESHOLD:
+                        if pop.comp_matrix[sp, p, c] < comp_threshold:
                             # If we've found the nth compatible mate, compare
                             # it to the ones we've seen so far.
                             if nth_candidate == 0:
@@ -156,3 +153,7 @@ def tournament_select(pop: ti.template()):
 
         # Finalize parent selections for this individual in the next generation.
         pop.matches[sp, i] = (p, m)
+
+
+def tournament_select(pop, tournament_size=2, comp_threshold=3.0):
+    tournament_select_kernel(pop, tournament_size, comp_threshold)
