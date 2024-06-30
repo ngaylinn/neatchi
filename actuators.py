@@ -115,19 +115,19 @@ class ActivationMaps:
             float, shape=(1, num_maps, map_size, MAX_NETWORK_SIZE))
 
         # Rendered maps of activations across 2D space.
-        self.maps = ti.field(
-            float, shape=pop.population_shape + (map_size, map_size))
+        self.maps = ti.Vector.field(
+            n=pop.num_outputs, dtype=float,
+            shape=pop.population_shape + (map_size, map_size))
 
     @ti.kernel
     def render(self):
         map_rows = self.pop.population_shape + (self.map_size,)
         for sp, i, r in ti.ndrange(*map_rows):
             for c in range(self.map_size):
-                m = sp * i 
+                w = sp * self.pop.num_individuals + i
                 inputs = ti.Vector([r / self.map_size, c / self.map_size])
-                # TODO: Support more than one output channel.
                 self.maps[sp, i, r, c] = activate_network(
-                    inputs, self.pop, sp, i, self.act, 0, 0, m, r)[0]
+                    inputs, self.pop, sp, i, self.act, 0, 0, w, r)
 
     @ti.kernel
     def get_one_kernel(self, w: int, output: ti.types.ndarray()):

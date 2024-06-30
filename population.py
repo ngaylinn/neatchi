@@ -12,7 +12,7 @@ import numpy as np
 import taichi as ti
 
 from .actuators import ActivationMaps, Actuators
-from .data_types import EMPTY_CPPN, Link, Node, cppn_dtype, MAX_NETWORK_SIZE
+from .data_types import EMPTY_CPPN, Link, Node, MAX_NETWORK_SIZE
 from . import reproduction
 from .reproduction import NONE
 from . import selection
@@ -65,6 +65,7 @@ class NeatPopulation:
 
         # An Actuators object for this population, created on demand.
         self.actuators = None
+        self.activation_maps = None
 
     # -------------------------------------------------------------------------
     # Public API
@@ -75,7 +76,8 @@ class NeatPopulation:
         return self.actuators
 
     def make_activation_maps(self, num_worlds, map_size):
-        return ActivationMaps(num_worlds, map_size, self)
+        self.activation_maps = ActivationMaps(num_worlds, map_size, self)
+        return self.activation_maps
 
     def randomize(self, elites=None):
         # Rotate the population buffer so that the previous population won't be
@@ -101,6 +103,10 @@ class NeatPopulation:
         # recurrent networks, since non-recurrent ones have no history.
         if self.actuators and self.is_recurrent:
             self.actuators.reset()
+
+        # Automatically keep the activation maps up to date.
+        if self.activation_maps:
+            self.activation_maps.render()
 
     def propagate(self):
         # NOTE: The caller must set self.fitness before calling propagate.
@@ -130,7 +136,11 @@ class NeatPopulation:
         if self.actuators and self.is_recurrent:
             self.actuators.reset()
 
-    def get_cppns(self):
+        # Automatically keep the activation maps up to date.
+        if self.activation_maps:
+            self.activation_maps.render()
+
+    def serialize(self):
         b = self.buffer_index[None]
         nodes = self.nodes.to_numpy()
         links = self.links.to_numpy()

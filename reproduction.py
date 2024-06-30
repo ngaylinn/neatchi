@@ -48,8 +48,9 @@ def add_random_link(pop, sp, i):
     num_nodes = pop.num_nodes(sp, i)
 
     from_node, to_node = 0, 0
-    # Make sure from_node < to_node and disallow links to input nodes.
-    from_node = rand_range(0, num_nodes - 1)
+    # Make sure from_node < to_node and disallow links from output nodes and to
+    # input nodes.
+    from_node = rand_range(0, num_nodes - pop.num_outputs)
     to_node = rand_range(ti.max(from_node + 1, pop.num_inputs), num_nodes)
 
     # Actually make the link, and make sure it gets an innovation number.
