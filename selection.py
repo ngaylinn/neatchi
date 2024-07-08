@@ -82,7 +82,7 @@ def analyze_compatibility(pop: ti.template()):
 
 
 @ti.kernel
-def tournament_select_kernel(pop: ti.template(), tournament_size: int,
+def tournament_select_kernel(pop: ti.template(), g: int, tournament_size: int,
                              comp_threshold: float):
     # For all individuals in each sub_population, pick its parent(s).
     for sp, i in ti.ndrange(*pop.population_shape):
@@ -103,7 +103,7 @@ def tournament_select_kernel(pop: ti.template(), tournament_size: int,
         for _ in range(tournament_size):
             c = rand_range(0, pop.num_individuals)
             # Compare log fitness to encourage diversity.
-            c_fitness = pop.fitness[sp, c]
+            c_fitness = pop.fitness[g, sp, c]
             if c_fitness > p_fitness:
                 p = c
                 p_fitness = c_fitness
@@ -133,7 +133,7 @@ def tournament_select_kernel(pop: ti.template(), tournament_size: int,
                             # it to the ones we've seen so far.
                             if nth_candidate == 0:
                                 # Compare log fitness to encourage diversity.
-                                c_fitness = pop.fitness[sp, c]
+                                c_fitness = pop.fitness[g, sp, c]
                                 if c_fitness > m_fitness:
                                     m = c
                                     m_fitness = c_fitness
@@ -152,8 +152,8 @@ def tournament_select_kernel(pop: ti.template(), tournament_size: int,
                     p, m = m, p
 
         # Finalize parent selections for this individual in the next generation.
-        pop.matches[sp, i] = (p, m)
+        pop.matches[g, sp, i] = (p, m)
 
 
-def tournament_select(pop, tournament_size=2, comp_threshold=3.0):
-    tournament_select_kernel(pop, tournament_size, comp_threshold)
+def tournament_select(pop, g, tournament_size=2, comp_threshold=3.0):
+    tournament_select_kernel(pop, g, tournament_size, comp_threshold)

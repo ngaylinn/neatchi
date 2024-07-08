@@ -14,9 +14,8 @@ from enum import Enum
 import numpy as np
 import taichi as ti
 
-MAX_NETWORK_SIZE = 200
+MAX_NETWORK_SIZE = 20
 
-from .activation_funcs import ActivationFuncs
 
 class NodeKinds(Enum):
     INPUT = 0
@@ -41,7 +40,7 @@ class Link:
     innov: int
 
 
-cppn_dtype = np.dtype([
+CPPN_DTYPE = np.dtype([
     ('nodes', np.dtype([
         ('kind', np.int32),
         ('act_func', np.int32),
@@ -60,5 +59,5 @@ cppn_dtype = np.dtype([
 EMPTY_CPPN = np.array(
     [([(-1, -1, np.nan, np.nan)] * MAX_NETWORK_SIZE,
       [(-1, -1, np.nan, -1)] * MAX_NETWORK_SIZE)],
-    dtype=cppn_dtype
+    dtype=CPPN_DTYPE
 )

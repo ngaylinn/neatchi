@@ -11,7 +11,7 @@ activation increases as the CPPNs evolve to be more complex.
 import numpy as np
 import taichi as ti
 
-from .actuators import ActivationMaps, Actuators
+from .actuators import Actuators
 from .data_types import EMPTY_CPPN, Link, Node, MAX_NETWORK_SIZE
 from . import reproduction
 from .reproduction import NONE
@@ -20,11 +20,13 @@ from .validation import validate_all
 
 @ti.data_oriented
 class NeatPopulation:
-    def __init__(self, population_shape, network_shape, is_recurrent):
+    def __init__(self, population_shape, network_shape, index,
+                 is_recurrent=False, history_length=1):
         self.population_shape = population_shape
         self.num_sub_pops, self.num_individuals = population_shape
         self.num_inputs, self.num_outputs = network_shape
         self.is_recurrent = is_recurrent
+        self.history_length = history_length
 
         # Used to track when links were added to aid in crossover.
         self.innovation_counter = ti.field(dtype=int, shape=())
@@ -60,29 +62,37 @@ class NeatPopulation:
         self.diversity = ti.field(float, shape=(self.num_sub_pops))
 
         # Fields for fitness and selection.
-        self.fitness = ti.field(int, shape=population_shape)
-        self.matches = ti.Vector.field(n=2, dtype=int, shape=population_shape)
+        self.fitness = ti.field(float,
+            shape=(history_length, self.num_sub_pops, self.num_individuals))
+        self.matches = ti.Vector.field(n=2, dtype=int,
+            shape=(history_length, self.num_sub_pops, self.num_individuals))
 
-        # An Actuators object for this population, created on demand.
+        # For mapping from a simulated world index to a population index.
+        self.index = ti.Vector.field(n=2, dtype=int, shape=len(index))
+        self.index.from_numpy(index)
+
+        # An Actuators object for this population, created on demand. They need
+        # an index to map from sub populations of CPPNs to worlds where those
+        # CPPNs might be rendered.
         self.actuators = None
-        self.activation_maps = None
 
     # -------------------------------------------------------------------------
     # Public API
     # -------------------------------------------------------------------------
 
-    def make_actuators(self, num_worlds, num_activations):
-        self.actuators = Actuators(num_worlds, num_activations, self)
+    def make_actuators(self, num_activations):
+        self.actuators = Actuators(self, num_activations)
         return self.actuators
-
-    def make_activation_maps(self, num_worlds, map_size):
-        self.activation_maps = ActivationMaps(num_worlds, map_size, self)
-        return self.activation_maps
 
     def randomize(self, elites=None):
         # Rotate the population buffer so that the previous population won't be
         # clobbered and we can copy elites from there.
-        self.buffer_index[None] = 1 - self.buffer_index[None]
+        self.rotate_buffer()
+
+        # Clear metadata for fitness and selection, to make sure nothing gets
+        # carried over from the previous generation.
+        self.fitness.fill(0.0)
+        self.matches.fill(NONE)
 
         # Initialize all the CPPNs in the current generation.
         self.clear()
@@ -104,24 +114,21 @@ class NeatPopulation:
         if self.actuators and self.is_recurrent:
             self.actuators.reset()
 
-        # Automatically keep the activation maps up to date.
-        if self.activation_maps:
-            self.activation_maps.render()
-
-    def propagate(self):
+    def propagate(self, generation=0):
         # NOTE: The caller must set self.fitness before calling propagate.
+        # NOTE: Value of generation must be less than history_size
 
         # Perform selection across all sub-populations.
-        selection.tournament_select(self)
+        selection.tournament_select(self, generation)
 
         # Fill the unused population buffer with a new generation drawn from
         # the current population buffer, possibly with crossover.
-        reproduction.propagate(self)
+        reproduction.propagate(self, generation)
 
         # Swap the buffers to make the new generation current, then mutate that
         # generation. This is done after the propagate step so that the code
         # for mutation doesn't need to be aware of what buffer index to use.
-        self.buffer_index[None] = 1 - self.buffer_index[None]
+        self.rotate_buffer()
         reproduction.mutate_all(self)
 
         # For debugging, make sure all the new CPPNs are valid.
@@ -135,10 +142,6 @@ class NeatPopulation:
         # reucrrent networks, since non-recurrent ones have no history.
         if self.actuators and self.is_recurrent:
             self.actuators.reset()
-
-        # Automatically keep the activation maps up to date.
-        if self.activation_maps:
-            self.activation_maps.render()
 
     def serialize(self):
         b = self.buffer_index[None]
@@ -291,6 +294,12 @@ class NeatPopulation:
             self.node_lens[b, sp, i] = 0
             self.link_lens[b, sp, i] = 0
 
+    @ti.kernel
+    def rotate_buffer(self):
+        # For some reason, Taichi gives a type cast warning if this is done
+        # from Python scope.
+        self.buffer_index[None] = 1 - self.buffer_index[None]
+
     @ti.func
     def has_room_for(self, sp, i, nodes, links):
         return (self.num_nodes(sp, i) + nodes < MAX_NETWORK_SIZE and
@@ -300,6 +309,10 @@ class NeatPopulation:
     def restore_elites(self, elites: ti.types.ndarray(dtype=ti.int32, ndim=2)):
         b_curr = self.buffer_index[None]
         b_prev = 1 - b_curr
+
+        # Elites always come from the final generation.
+        g = self.history_length - 1
+
         # Copy the full network from the previous buffer to the current one,
         # overriding whatever was generated from the usual breeding program.
         for e, x in ti.ndrange(elites.shape[0], MAX_NETWORK_SIZE):
@@ -310,6 +323,6 @@ class NeatPopulation:
             # Also update the match-making records and list lengths to reflect
             # this change. This only needs to happen once per individual.
             if x == 0:
-                self.matches[sp, i] = (i, NONE)
+                self.matches[g, sp, i] = (i, NONE)
                 self.node_lens[b_curr, sp, i] = self.node_lens[b_prev, sp, i]
                 self.link_lens[b_curr, sp, i] = self.link_lens[b_prev, sp, i]

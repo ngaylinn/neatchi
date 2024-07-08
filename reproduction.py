@@ -23,7 +23,6 @@ behavior manually. In the future, a standard implementation may be provided.
 import taichi as ti
 
 from . import activation_funcs
-from . import population
 from .data_types import Node, NodeKinds, Link
 
 MAX_INITIAL_MUTATIONS = 8
@@ -253,11 +252,11 @@ def clone(pop, sp, i, p):
 
 
 @ti.kernel
-def propagate(pop: ti.template()):
+def propagate(pop: ti.template(), g: int):
     # Generate each individual in each new sub population, generate one from
     # the old sub population, either by cloning or crossover.
     for sp, i in ti.ndrange(*pop.population_shape):
-        p, m = pop.matches[sp, i]
+        p, m = pop.matches[g, sp, i]
         if m == NONE:
             clone(pop, sp, i, p)
         else:
