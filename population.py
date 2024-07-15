@@ -12,7 +12,7 @@ import numpy as np
 import taichi as ti
 
 from .actuators import Actuators
-from .data_types import EMPTY_CPPN, Link, Node, MAX_NETWORK_SIZE
+from .data_types import CPPN_DTYPE, EMPTY_CPPN, Link, Node, MAX_NETWORK_SIZE
 from . import reproduction
 from .reproduction import NONE
 from . import selection
@@ -143,7 +143,7 @@ class NeatPopulation:
         if self.actuators and self.is_recurrent:
             self.actuators.reset()
 
-    def serialize(self):
+    def to_numpy(self):
         b = self.buffer_index[None]
         nodes = self.nodes.to_numpy()
         links = self.links.to_numpy()
@@ -158,6 +158,28 @@ class NeatPopulation:
                 result[sp, i]['links'][key][:num_links] = \
                         data[b, sp, i, :num_links]
         return result
+
+    def from_numpy(self, cppns):
+        # Takes an array and expands it into a double-buffered version of
+        # itself by copying it once into a new first axis.
+        def double_buff(arr):
+            return np.repeat(np.expand_dims(arr, 0), 2, 0)
+
+        # Make sure the input data fits.
+        assert cppns.shape == self.population_shape
+        assert cppns.dtype == CPPN_DTYPE
+
+        self.nodes.from_numpy(double_buff(cppns['nodes']))
+        self.node_lens.from_numpy(
+            double_buff(np.count_nonzero(
+                cppns['nodes']['kind'] >= 0, axis=2
+            ).astype(np.int32)))
+
+        self.links.from_numpy(double_buff(cppns['links']))
+        self.link_lens.from_numpy(
+            double_buff(np.count_nonzero(
+                cppns['links']['innov'] >= 0, axis=2
+            ).astype(np.int32)))
 
     # -------------------------------------------------------------------------
     # Internal API: Node management
