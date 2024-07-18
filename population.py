@@ -80,7 +80,9 @@ class NeatPopulation:
     # Public API
     # -------------------------------------------------------------------------
 
-    def make_actuators(self, num_activations):
+    def make_actuators(self, num_activations=None):
+        if self.is_recurrent:
+            assert num_activations is not None
         self.actuators = Actuators(self, num_activations)
         return self.actuators
 

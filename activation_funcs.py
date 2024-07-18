@@ -113,46 +113,46 @@ def activate_step(raw):
     return raw // 1.0
 
 
-# TODO: Should this be a regular @ti.func?
-# TODO: Should you use ti.static on the ifs?
-@ti.real_func
+@ti.func
 def call(act_func: int, raw: float) -> float:
+    value = 0.0
     if act_func == ActivationFuncs.SIGMOID.value:
-        return activate_sigmoid(raw)
-    if act_func == ActivationFuncs.TANH.value:
-        return activate_tanh(raw)
-    if act_func == ActivationFuncs.SIN.value:
-        return activate_sin(raw)
-    if act_func == ActivationFuncs.GAUS.value:
-        return activate_gaus(raw)
-    if act_func == ActivationFuncs.RELU.value:
-        return activate_relu(raw)
-    if act_func == ActivationFuncs.IDENTITY.value:
-        return activate_identity(raw)
-    if act_func == ActivationFuncs.CLAMPED.value:
-        return activate_clamped(raw)
-    if act_func == ActivationFuncs.INV.value:
-        return activate_inv(raw)
-    if act_func == ActivationFuncs.LOG.value:
-        return activate_log(raw)
-    if act_func == ActivationFuncs.EXP.value:
-        return activate_exp(raw)
-    if act_func == ActivationFuncs.ABS.value:
-        return activate_abs(raw)
-    if act_func == ActivationFuncs.SQUARE.value:
-        return activate_square(raw)
-    if act_func == ActivationFuncs.CUBE.value:
-        return activate_cube(raw)
-    if act_func == ActivationFuncs.TRIANGLE.value:
-        return activate_triangle(raw)
-    if act_func == ActivationFuncs.SAWTOOTH.value:
-        return activate_sawtooth(raw)
-    if act_func == ActivationFuncs.SQR_WAVE.value:
-        return activate_sqr_wave(raw)
-    if act_func == ActivationFuncs.NOTCH.value:
-        return activate_notch(raw)
-    if act_func == ActivationFuncs.STEP.value:
-        return activate_step(raw)
+        value = activate_sigmoid(raw)
+    elif act_func == ActivationFuncs.TANH.value:
+        value = activate_tanh(raw)
+    elif act_func == ActivationFuncs.SIN.value:
+        value = activate_sin(raw)
+    elif act_func == ActivationFuncs.GAUS.value:
+        value = activate_gaus(raw)
+    elif act_func == ActivationFuncs.RELU.value:
+        value = activate_relu(raw)
+    elif act_func == ActivationFuncs.IDENTITY.value:
+        value = activate_identity(raw)
+    elif act_func == ActivationFuncs.CLAMPED.value:
+        value = activate_clamped(raw)
+    elif act_func == ActivationFuncs.INV.value:
+        value = activate_inv(raw)
+    elif act_func == ActivationFuncs.LOG.value:
+        value = activate_log(raw)
+    elif act_func == ActivationFuncs.EXP.value:
+        value = activate_exp(raw)
+    elif act_func == ActivationFuncs.ABS.value:
+        value = activate_abs(raw)
+    elif act_func == ActivationFuncs.SQUARE.value:
+        value = activate_square(raw)
+    elif act_func == ActivationFuncs.CUBE.value:
+        value = activate_cube(raw)
+    elif act_func == ActivationFuncs.TRIANGLE.value:
+        value = activate_triangle(raw)
+    elif act_func == ActivationFuncs.SAWTOOTH.value:
+        value = activate_sawtooth(raw)
+    elif act_func == ActivationFuncs.SQR_WAVE.value:
+        value = activate_sqr_wave(raw)
+    elif act_func == ActivationFuncs.NOTCH.value:
+        value = activate_notch(raw)
+    elif act_func == ActivationFuncs.STEP.value:
+        value = activate_step(raw)
+    return value
 
 
 # -----------------------------------------------------------------------------
