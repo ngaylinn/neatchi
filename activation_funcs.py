@@ -38,7 +38,9 @@ NUM_ACTIVATION_FUNCS = len(ActivationFuncs.__members__)
 
 @ti.func
 def random():
-    return ti.random(dtype=int) % ti.static(NUM_ACTIVATION_FUNCS)
+    return ti.cast(
+        ti.random(dtype=int) % ti.static(NUM_ACTIVATION_FUNCS),
+        ti.uint8)
 
 @ti.func
 def activate_sigmoid(raw):
@@ -114,7 +116,7 @@ def activate_step(raw):
 
 
 @ti.func
-def call(act_func: int, raw: float) -> float:
+def call(act_func: ti.uint8, raw: float) -> float:
     value = 0.0
     if act_func == ActivationFuncs.SIGMOID.value:
         value = activate_sigmoid(raw)

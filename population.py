@@ -195,12 +195,12 @@ class NeatPopulation:
     @ti.func
     def get_node(self, sp, i, n):
         b = self.buffer_index[None]
-        return self.nodes[b, sp, i, n]
+        return self.nodes[b, sp, i, int(n)]
 
     @ti.func
     def set_node(self, sp, i, n, node):
         b = self.buffer_index[None]
-        self.nodes[b, sp, i, n] = node
+        self.nodes[b, sp, i, int(n)] = node
 
     @ti.func
     def insert_node(self, sp, i, n, node):
@@ -231,9 +231,9 @@ class NeatPopulation:
         for l in range(self.num_links(sp, i)):
             link = self.links[b, sp, i, l]
             if link.from_node >= shift_begin and link.from_node < shift_end:
-                self.links[b, sp, i, l].from_node += 1
+                self.links[b, sp, i, l].from_node += ti.cast(1, ti.uint8)
             if link.to_node >= shift_begin and link.to_node < shift_end:
-                self.links[b, sp, i, l].to_node += 1
+                self.links[b, sp, i, l].to_node += ti.cast(1, ti.uint8)
 
     @ti.func
     def delete_node(self, sp, i, n):
@@ -257,9 +257,9 @@ class NeatPopulation:
             # Any links referring to nodes after this one need their indices
             # updated to reflect the deletion.
             if link.from_node > n:
-                self.links[b, sp, i, l].from_node -= 1
+                self.links[b, sp, i, l].from_node -= ti.cast(1, ti.uint8)
             if link.to_node > n:
-                self.links[b, sp, i, l].to_node -= 1
+                self.links[b, sp, i, l].to_node -= ti.cast(1, ti.uint8)
             # Any links to or from the deleted node are deleted.
             if link.from_node == n or link.to_node == n:
                 self.delete_link(sp, i, l)
