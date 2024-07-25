@@ -2,11 +2,10 @@ import numpy as np
 import taichi as ti
 
 from .data_types import NodeKinds, MAX_NETWORK_SIZE
-from .activation_funcs import ActivationFuncs, NUM_ACTIVATION_FUNCS
 from .reproduction import BIAS_RANGE, GAIN_RANGE, WEIGHT_RANGE
 
 
-def print_cppn(cppn):
+def print_cppn(pop, cppn):
     def print_edge(num_cells, top):
         print('┏' if top else '┗', end='')
         for cell in range(num_cells):
@@ -23,7 +22,7 @@ def print_cppn(cppn):
     print_body([f'{"Node " + str(n):^8}' for n in range(num_nodes)])
     print_body([f'{NodeKinds(cppn["nodes"]["kind"][n]).name:^8}'
                 for n in range(num_nodes)])
-    print_body([f'{ActivationFuncs(cppn["nodes"]["act_func"][n]).name:^8}'
+    print_body([f'{pop.activation_funcs.name(cppn["nodes"]["act_func"][n]):^8}'
                 for n in range(num_nodes)])
     print_body([f'b={cppn["nodes"]["bias"][n]:+5.3f}'
                 for n in range(num_nodes)])
@@ -78,7 +77,7 @@ def validate(pop: ti.template(), sp: int, i: int) -> bool:
             if node.kind != NodeKinds.OUTPUT.value:
                 print(f'The last {pop.num_outputs} nodes should have type OUTPUT')
                 valid = False
-            if node.act_func < 0 or node.act_func >= NUM_ACTIVATION_FUNCS:
+            if node.act_func < 0 or node.act_func >= pop.activation_funcs.count:
                 print(f'Node {n} has an invalid activation function')
                 valid = False
             if node.bias < -BIAS_RANGE or node.bias > BIAS_RANGE:
@@ -120,5 +119,5 @@ def validate_all(pop):
         if not validate(pop, sp, i):
             cppn = pop.get_cppns([(sp, i)])[0]
             print(f'While validating individual ({sp}, {i}):')
-            print_cppn(cppn)
+            print_cppn(pop, cppn)
             exit()

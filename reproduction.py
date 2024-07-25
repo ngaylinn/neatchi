@@ -22,7 +22,6 @@ behavior manually. In the future, a standard implementation may be provided.
 
 import taichi as ti
 
-from . import activation_funcs
 from .data_types import Node, NodeKinds, Link
 
 MAX_INITIAL_MUTATIONS = 8
@@ -57,10 +56,10 @@ def add_random_link(pop, sp, i):
 
 
 @ti.func
-def make_random_node(node_type):
+def make_random_node(pop, node_type):
     return Node(
         node_type,
-        activation_funcs.random(),
+        pop.activation_funcs.random(),
         2 * BIAS_RANGE * ti.random() - BIAS_RANGE,
         2 * GAIN_RANGE * ti.random() - GAIN_RANGE,
         False)
@@ -80,7 +79,7 @@ def add_random_node(pop, sp, i):
 
     # Make a node to go between the nodes that link connected, and allocate a
     # variable for its index (to be determined below).
-    node = make_random_node(NodeKinds.HIDDEN.value)
+    node = make_random_node(pop, NodeKinds.HIDDEN.value)
     n = 0
 
     # Pick a place to put this node, someplace after the from_node and
@@ -131,7 +130,7 @@ def mutate_one(pop, sp, i):
     elif mutation_kind == 2:
         n = rand_range(0, pop.num_nodes(sp, i))
         node = pop.get_node(sp, i, n)
-        node.act_func = activation_funcs.random()
+        node.act_func = pop.activation_funcs.random()
         pop.set_node(sp, i, n, node)
 
     # Change bias
@@ -256,7 +255,7 @@ def propagate(pop: ti.template(), g: int):
     # Generate each individual in each new sub population, generate one from
     # the old sub population, either by cloning or crossover.
     for sp, i in ti.ndrange(*pop.population_shape):
-        p, m = pop.matches[g, sp, i]
+        p, m = pop.matchmaker.matches[g, sp, i]
         if m == NONE:
             clone(pop, sp, i, p)
         else:
@@ -278,9 +277,9 @@ def random_init(pop: ti.template()):
     # activation functions, and one random mutation each.
     for sp, i in ti.ndrange(*pop.population_shape):
         for n in range(pop.num_inputs):
-            pop.insert_node(sp, i, n, make_random_node(NodeKinds.INPUT.value))
+            pop.insert_node(sp, i, n, make_random_node(pop, NodeKinds.INPUT.value))
         for n in range(pop.num_inputs, pop.num_inputs + pop.num_outputs):
-            pop.insert_node(sp, i, n, make_random_node(NodeKinds.OUTPUT.value))
+            pop.insert_node(sp, i, n, make_random_node(pop, NodeKinds.OUTPUT.value))
         # Add a randomized number of mutations to make the initial population
         # somewhat diverse.
         for _ in range(rand_range(1, MAX_INITIAL_MUTATIONS + 1)):

@@ -8,25 +8,89 @@ as the CPPNs evolve. This means that the time spent on reproduction and
 activation increases as the CPPNs evolve to be more complex.
 """
 
+from abc import ABC, abstractmethod
+
 import numpy as np
 import taichi as ti
 
-from .actuators import Actuators
-from .data_types import CPPN_DTYPE, EMPTY_CPPN, Link, Node, MAX_NETWORK_SIZE
-from . import reproduction
-from .reproduction import NONE
-from . import selection
+from .activation import ActivationFuncs, activate
+from .data_types import export_cppns, import_cppns, Link, MAX_NETWORK_SIZE, Node
+from .reproduction import mutate_all, propagate, random_init
+from .selection import get_compatibility
 from .validation import validate_all
 
+
 @ti.data_oriented
-class NeatPopulation:
-    def __init__(self, population_shape, network_shape, index,
-                 is_recurrent=False, history_length=1):
+class Population(ABC):
+    # -------------------------------------------------------------------------
+    # Public API
+    # -------------------------------------------------------------------------
+
+    def __init__(self, population_shape, index, matchmaker=None):
         self.population_shape = population_shape
         self.num_sub_pops, self.num_individuals = population_shape
+
+        if isinstance(index, np.ndarray):
+            self.index = ti.Vector.field(n=2, dtype=int, shape=len(index))
+            self.index.from_numpy(index)
+        elif isinstance(index, ti.lang.matrix.MatrixField):
+            self.index = index
+
+        self.matchmaker = matchmaker
+
+    @abstractmethod
+    @ti.func
+    def activate(self, w, inputs):
+        ...
+
+    def randomize(self, elites=None):
+        self.matchmaker.reset()
+        self.make_random_population(elites)
+        self.matchmaker.analyze_compatibility(self)
+
+    # NOTE: Value of generation must be less than history_size
+    def propagate(self, generation=0):
+        self.matchmaker.update_matches(generation)
+        self.make_next_generation(generation)
+        self.matchmaker.analyze_compatibility(self)
+
+    @abstractmethod
+    def to_numpy(self):
+        ...
+
+    @abstractmethod
+    def from_numpy(self, arr):
+        ...
+
+    # -------------------------------------------------------------------------
+    # Internal API
+    # -------------------------------------------------------------------------
+
+    @abstractmethod
+    def get_compatibility(self, sp, p, m):
+        ...
+
+    @abstractmethod
+    def make_next_generation(self, generation):
+        ...
+
+    @abstractmethod
+    def make_random_population(self, elites):
+        ...
+
+
+# files.
+@ti.data_oriented
+class CppnPopulation(Population):
+    # -------------------------------------------------------------------------
+    # Public API
+    # -------------------------------------------------------------------------
+
+    def __init__(self, population_shape, network_shape, index,
+                 matchmaker=None, activation_funcs=None):
+        super().__init__(population_shape, index, matchmaker)
+
         self.num_inputs, self.num_outputs = network_shape
-        self.is_recurrent = is_recurrent
-        self.history_length = history_length
 
         # Used to track when links were added to aid in crossover.
         self.innovation_counter = ti.field(dtype=int, shape=())
@@ -55,133 +119,20 @@ class NeatPopulation:
         self.link_lens = ti.field(int,
             shape=(NUM_BUFFERS, self.num_sub_pops, self.num_individuals))
 
-        # Fields for pairwise compatibility and the diversity metric.
-        self.comp_matrix = ti.field(float,
-            shape=(self.num_sub_pops, self.num_individuals, self.num_individuals))
-        self.comp_matrix.fill(ti.math.nan) # For the main diagonals.
-        self.diversity = ti.field(float, shape=(self.num_sub_pops))
-
-        # Fields for fitness and selection.
-        self.fitness = ti.field(float,
-            shape=(history_length, self.num_sub_pops, self.num_individuals))
-        self.matches = ti.Vector.field(n=2, dtype=int,
-            shape=(history_length, self.num_sub_pops, self.num_individuals))
-
-        # For mapping from a simulated world index to a population index.
-        self.index = ti.Vector.field(n=2, dtype=int, shape=len(index))
-        self.index.from_numpy(index)
-
-        # An Actuators object for this population, created on demand. They need
-        # an index to map from sub populations of CPPNs to worlds where those
-        # CPPNs might be rendered.
-        self.actuators = None
-
-    # -------------------------------------------------------------------------
-    # Public API
-    # -------------------------------------------------------------------------
-
-    def make_actuators(self, num_activations=None):
-        if self.is_recurrent:
-            assert num_activations is not None
-        self.actuators = Actuators(self, num_activations)
-        return self.actuators
-
-    def randomize(self, elites=None):
-        # Rotate the population buffer so that the previous population won't be
-        # clobbered and we can copy elites from there.
-        self.rotate_buffer()
-
-        # Clear metadata for fitness and selection, to make sure nothing gets
-        # carried over from the previous generation.
-        self.fitness.fill(0.0)
-        self.matches.fill(NONE)
-
-        # Initialize all the CPPNs in the current generation.
-        self.clear()
-        reproduction.random_init(self)
-
-        # Copy back the elites from the previous population.
-        if elites is not None:
-            self.restore_elites(elites)
-
-        # For debugging, make sure all the new CPPNs are valid.
-        # validate_all(self)
-
-        # Compute compatibility / diversity for the new population
-        selection.analyze_compatibility(self)
-
-        # Every time the population gets updated, we invalidate the activation
-        # history in any actuators that got created. This only matters for
-        # recurrent networks, since non-recurrent ones have no history.
-        if self.actuators and self.is_recurrent:
-            self.actuators.reset()
-
-    def propagate(self, generation=0):
-        # NOTE: The caller must set self.fitness before calling propagate.
-        # NOTE: Value of generation must be less than history_size
-
-        # Perform selection across all sub-populations.
-        selection.tournament_select(self, generation)
-
-        # Fill the unused population buffer with a new generation drawn from
-        # the current population buffer, possibly with crossover.
-        reproduction.propagate(self, generation)
-
-        # Swap the buffers to make the new generation current, then mutate that
-        # generation. This is done after the propagate step so that the code
-        # for mutation doesn't need to be aware of what buffer index to use.
-        self.rotate_buffer()
-        reproduction.mutate_all(self)
-
-        # For debugging, make sure all the new CPPNs are valid.
-        # validate_all(self)
-
-        # Compute compatibility / diversity for the new population
-        selection.analyze_compatibility(self)
-
-        # Every time the population gets updated, we invalidate the activation
-        # history in any actuators that got created. This only matters for
-        # reucrrent networks, since non-recurrent ones have no history.
-        if self.actuators and self.is_recurrent:
-            self.actuators.reset()
+        if activation_funcs is None:
+            self.activation_funcs = ActivationFuncs()
+        else:
+            self.activation_funcs = activation_funcs
 
     def to_numpy(self):
-        b = self.buffer_index[None]
-        nodes = self.nodes.to_numpy()
-        links = self.links.to_numpy()
-        result = np.full(self.population_shape, EMPTY_CPPN)
-        for sp, i in ti.ndrange(*self.population_shape):
-            num_nodes = self.node_lens[b, sp, i]
-            num_links = self.link_lens[b, sp, i]
-            for key, data in nodes.items():
-                result[sp, i]['nodes'][key][:num_nodes] = \
-                        data[b, sp, i, :num_nodes]
-            for key, data in links.items():
-                result[sp, i]['links'][key][:num_links] = \
-                        data[b, sp, i, :num_links]
-        return result
+        return export_cppns(self)
 
     def from_numpy(self, cppns):
-        # Takes an array and expands it into a double-buffered version of
-        # itself by copying it once into a new first axis.
-        def double_buff(arr):
-            return np.repeat(np.expand_dims(arr, 0), 2, 0)
+        import_cppns(self, cppns)
 
-        # Make sure the input data fits.
-        assert cppns.shape == self.population_shape
-        assert cppns.dtype == CPPN_DTYPE
-
-        self.nodes.from_numpy(double_buff(cppns['nodes']))
-        self.node_lens.from_numpy(
-            double_buff(np.count_nonzero(
-                cppns['nodes']['kind'] >= 0, axis=2
-            ).astype(np.int32)))
-
-        self.links.from_numpy(double_buff(cppns['links']))
-        self.link_lens.from_numpy(
-            double_buff(np.count_nonzero(
-                cppns['links']['innov'] >= 0, axis=2
-            ).astype(np.int32)))
+    @ti.func
+    def activate(self, w, inputs):
+        return activate(self, w, inputs)
 
     # -------------------------------------------------------------------------
     # Internal API: Node management
@@ -309,6 +260,10 @@ class NeatPopulation:
     # Internal API: Other
     # -------------------------------------------------------------------------
 
+    @ti.func
+    def get_compatibility(self, sp, p, m):
+        return get_compatibility(self, sp, p, m)
+
     @ti.kernel
     def clear(self):
         # Reset all the node and link lists to empty for the current population
@@ -334,9 +289,6 @@ class NeatPopulation:
         b_curr = self.buffer_index[None]
         b_prev = 1 - b_curr
 
-        # Elites always come from the final generation.
-        g = self.history_length - 1
-
         # Copy the full network from the previous buffer to the current one,
         # overriding whatever was generated from the usual breeding program.
         for e, x in ti.ndrange(elites.shape[0], MAX_NETWORK_SIZE):
@@ -347,6 +299,35 @@ class NeatPopulation:
             # Also update the match-making records and list lengths to reflect
             # this change. This only needs to happen once per individual.
             if x == 0:
-                self.matches[g, sp, i] = (i, NONE)
                 self.node_lens[b_curr, sp, i] = self.node_lens[b_prev, sp, i]
                 self.link_lens[b_curr, sp, i] = self.link_lens[b_prev, sp, i]
+
+    def make_random_population(self, elites=None):
+        # Rotate the population buffer so that the previous population won't be
+        # clobbered and we can copy elites from there.
+        self.rotate_buffer()
+
+        # Initialize all the CPPNs in the current generation.
+        self.clear()
+        random_init(self)
+
+        # Copy back the elites from the previous population.
+        if elites is not None:
+            self.restore_elites(elites)
+
+        # For debugging, make sure all the new CPPNs are valid.
+        # validate_all(self)
+
+    def make_next_generation(self, generation=0):
+        # Fill the unused population buffer with a new generation drawn from
+        # the current population buffer, possibly with crossover.
+        propagate(self, generation)
+
+        # Swap the buffers to make the new generation current, then mutate that
+        # generation. This is done after the propagate step so that the code
+        # for mutation doesn't need to be aware of what buffer index to use.
+        self.rotate_buffer()
+        mutate_all(self)
+
+        # For debugging, make sure all the new CPPNs are valid.
+        # validate_all(self)

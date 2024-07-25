@@ -75,3 +75,43 @@ EMPTY_CPPN = np.array(
       [(-1, -1, np.nan, -1)] * MAX_NETWORK_SIZE)],
     dtype=CPPN_DTYPE
 )
+
+
+def import_cppns(pop, cppns):
+    # Takes an array and expands it into a double-buffered version of
+    # itself by copying it once into a new first axis.
+    def double_buff(arr):
+        return np.repeat(np.expand_dims(arr, 0), 2, 0)
+
+    # Make sure the input data fits.
+    assert cppns.shape == pop.population_shape
+    assert cppns.dtype == CPPN_DTYPE
+
+    pop.nodes.from_numpy(double_buff(cppns['nodes']))
+    pop.node_lens.from_numpy(
+        double_buff(np.count_nonzero(
+            cppns['nodes']['kind'] >= 0, axis=2
+        ).astype(np.int32)))
+
+    pop.links.from_numpy(double_buff(cppns['links']))
+    pop.link_lens.from_numpy(
+        double_buff(np.count_nonzero(
+            cppns['links']['innov'] >= 0, axis=2
+        ).astype(np.int32)))
+
+
+def export_cppns(pop):
+    b = pop.buffer_index[None]
+    nodes = pop.nodes.to_numpy()
+    links = pop.links.to_numpy()
+    result = np.full(pop.population_shape, EMPTY_CPPN)
+    for sp, i in ti.ndrange(*pop.population_shape):
+        num_nodes = pop.node_lens[b, sp, i]
+        num_links = pop.link_lens[b, sp, i]
+        for key, data in nodes.items():
+            result[sp, i]['nodes'][key][:num_nodes] = \
+                    data[b, sp, i, :num_nodes]
+        for key, data in links.items():
+            result[sp, i]['links'][key][:num_links] = \
+                    data[b, sp, i, :num_links]
+    return result

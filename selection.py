@@ -2,16 +2,19 @@ import taichi as ti
 
 from .reproduction import rand_range, NONE
 
-
 # Constants for testing compatibility between two individuals in a Population.
 DISJOINT_COEFF = 1.0
 WEIGHT_COEFF = 0.4
 EPSILON = 1e-8
 
+TOURNAMENT_SIZE = 2
+COMP_THRESHOLD = 3.0
 CROSSOVER_RATE = 0.6
+
 
 @ti.func
 def get_compatibility(pop, sp, p, m):
+    """Computes compatibility between a pair of CPPNs in a population."""
     num_disjoint = 0
     weight_delta = 0.0
     num_common_weights = 0
@@ -40,120 +43,155 @@ def get_compatibility(pop, sp, p, m):
             # between "disjoint" and "excess" genes, but we don't.
             else:
                 num_disjoint += 1
+
     return float(
         DISJOINT_COEFF * num_disjoint / (EPSILON + largest_num_links) +
         WEIGHT_COEFF * weight_delta / (EPSILON + num_common_weights))
 
 
-@ti.kernel
-def analyze_compatibility(pop: ti.template()):
-    # This function populates a compatibility matrix for each sub-population in
-    # pop, with one row and one column for each individual. Since these are
-    # symmetric matrices, we allocate one thread per unique value we need to
-    # fill (half the matrix minus the main diagonal, which is unfilled).
-    triangle_size = int(((pop.num_individuals - 1) / 2) * pop.num_individuals)
-    for sp, tri in ti.ndrange(pop.num_sub_pops, triangle_size):
-        # Identify the row and column this thread should fill (ie, which
-        # potential parents to compute compatibility for).
-        p = tri // pop.num_individuals
-        m = tri % pop.num_individuals
+@ti.data_oriented
+class Matchmaker:
+    """A general class for performing tournament selection on populations."""
 
-        # If this would compute a cell in the lower triangle of the matrix, use a
-        # a position on the opposite side of the upper triangle instead.
-        if p >= m:
-            p = pop.num_individuals - p - 2
-            m = pop.num_individuals - m - 1
+    def __init__(self, population_shape, history_length=1):
+        self.population_shape = population_shape
+        self.num_sub_pops, self.num_individuals = population_shape
+        self.history_length = history_length
 
-        # For convenience, fill both side of the matrix. We have to allocate
-        # this much space anyway, so the only thing that really matters for
-        # performance is that we avoid recomputing symmetric values. Note that
-        # the main diagonal of the matrix is not populated.
-        compatibility = 0.0 # get_compatibility(pop, sp, p, m)
-        pop.comp_matrix[sp, p, m] = compatibility
-        pop.comp_matrix[sp, m, p] = compatibility
+        # Fields to track compatibility and diversity of the population.
+        self.comp_matrix = ti.field(float,
+            shape=(self.num_sub_pops, self.num_individuals, self.num_individuals))
+        self.comp_matrix.fill(ti.math.nan) # For the main diagonals.
+        self.diversity = ti.field(float, shape=(self.num_sub_pops))
 
-        # Sum compatibility for all pairs of individuals in this sub-population
-        # (Taichi should automatically optimize this reduction).
-        pop.diversity[sp] += compatibility
+        # Keep a history of fitness scores and mate selections so that we can
+        # avoid copying them to the host on every iteration.
+        self.fitness = ti.field(float,
+            shape=(history_length, self.num_sub_pops, self.num_individuals))
+        self.matches = ti.Vector.field(n=2, dtype=int,
+            shape=(history_length, self.num_sub_pops, self.num_individuals))
 
-    # Invert the total compatibility to get diversity.
-    for sp in range(pop.num_sub_pops):
-        pop.diversity[sp] = 1.0 / pop.diversity[sp]
+    def reset(self):
+        # Clear history data.
+        self.fitness.fill(0.0)
+        self.matches.fill(NONE)
 
-
-@ti.kernel
-def tournament_select_kernel(pop: ti.template(), g: int, tournament_size: int,
-                             comp_threshold: float):
-    # For all individuals in each sub_population, pick its parent(s).
-    for sp, i in ti.ndrange(*pop.population_shape):
-        # Parent and mate indices for this matchup.
+    @ti.func
+    def unrestrited_tournament(self, g, sp):
+        """Run a tournament to pick a parent from a given sub-population."""
         p = NONE
-        m = NONE
-
-        # Uncomment to support fractional tournament sizes by picking some
-        # integer value between floor() and ceil() of TOURNAMENT_SIZE with
-        # probabily determined by the fractional part of TOURNAMENT_SIZE.
-        #tournament_size = (
-        #    (ti.random() < tournament_size % 1.0) +
-        #    int(tournament_size))
-
-        # Consider TOURNAMENT_SIZE candidates and choose the most fit one to be
-        # the parent in this match.
         p_fitness = -ti.math.inf
-        for _ in range(tournament_size):
-            c = rand_range(0, pop.num_individuals)
-            # Compare log fitness to encourage diversity.
-            c_fitness = pop.fitness[g, sp, c]
+
+        # Look at TOURNAMENT_SIZE random individuals and return the most fit.
+        for _ in range(TOURNAMENT_SIZE):
+            c = rand_range(0, self.num_individuals)
+            c_fitness = self.fitness[g, sp, c]
             if c_fitness > p_fitness:
                 p = c
                 p_fitness = c_fitness
+        return p, p_fitness
 
-        # Randomly decide whether to attempt crossover at all or if this parent
-        # will simply clone itself.
-        if ti.random() < CROSSOVER_RATE:
-            # Count how many compatible mates there are. We need to know this
-            # in order to randomly pick one of them. We traverse this list
-            # twice rather than saving the results to save memory.
-            num_compatible_mates = 0
-            for c in range(pop.num_individuals):
-                if pop.comp_matrix[sp, p, c] < comp_threshold:
-                    num_compatible_mates += 1
+    @ti.func
+    def count_compatible(self, sp, p):
+        """Count how many individuals are compatible with the given parent."""
+        num_compatible_mates = 0
+        for c in range(self.num_individuals):
+            if self.comp_matrix[sp, p, c] < COMP_THRESHOLD:
+                num_compatible_mates += 1
+        return num_compatible_mates
 
-            # If there are compatible mates, hold a tournament to pick one.
-            if num_compatible_mates > 0:
-                m_fitness = -ti.math.inf
-                for _ in range(tournament_size):
-                    # Pick one of the compatible mates at random. Note, this is
-                    # not an array index, it's the number of valid mates to
-                    # skip before we get to our selected candidate.
-                    nth_candidate = rand_range(0, num_compatible_mates)
-                    for c in range(pop.num_individuals):
-                        if pop.comp_matrix[sp, p, c] < comp_threshold:
-                            # If we've found the nth compatible mate, compare
-                            # it to the ones we've seen so far.
-                            if nth_candidate == 0:
-                                # Compare log fitness to encourage diversity.
-                                c_fitness = pop.fitness[g, sp, c]
-                                if c_fitness > m_fitness:
-                                    m = c
-                                    m_fitness = c_fitness
+    @ti.func
+    def restricted_tournament(self, g, sp, p):
+        """Run a parent to pick a mate compatible with the given parent."""
+        m = NONE
+        m_fitness = -ti.math.inf
 
-                                # Once we test the nth candidate, we can move
-                                # on to the next round of the tournament.
-                                break
+        # Count how many compatible mates there are. We need to know this in
+        # order to randomly pick one of them. Note that we traverse the
+        # compatibility matrix again in the following loop rather than caching
+        # results and taking up even more GPU memory.
+        num_compatible_mates = self.count_compatible(sp, p)
 
-                            # If we haven't reached the nth one yet, count down
-                            # and keep going.
-                            nth_candidate -= 1
+        # If there are compatible mates, hold a tournament to pick one.
+        if num_compatible_mates > 0:
+            for _ in range(TOURNAMENT_SIZE):
+                # Pick one of the compatible mates at random. Note, this is not
+                # an array index, it's the number of valid mates to skip before
+                # we get to our selected candidate.
+                nth_candidate = rand_range(0, num_compatible_mates)
+                for c in range(self.num_individuals):
+                    if self.comp_matrix[sp, p, c] < COMP_THRESHOLD:
+                        # If we've found the nth compatible mate, compare it to
+                        # the others in the tournament and keep the best one.
+                        if nth_candidate == 0:
+                            c_fitness = self.fitness[g, sp, c]
+                            if c_fitness > m_fitness:
+                                m = c
+                                m_fitness = c_fitness
+
+                            # Once we test the nth candidate, we can move on to
+                            # the next round of the tournament.
+                            break
+
+                        # If we haven't reached the nth one yet, count down and
+                        # keep going.
+                        nth_candidate -= 1
+        return m, m_fitness
+
+    @ti.kernel
+    def update_matches(self, g: int):
+        """Perform selection for all individuals in all sub-populations."""
+        for sp, i in ti.ndrange(*self.population_shape):
+            # Hold a tournament to randomly pick a parent for this individual.
+            p, p_fitness = self.unrestrited_tournament(g, sp)
+
+            # Randomly decide whether to attempt crossover at all or if this parent
+            # will simply clone itself.
+            m = NONE
+            if ti.random() < CROSSOVER_RATE:
+                # Hold a tournament among all the mates compatible with parent
+                # to pick one.
+                m, m_fitness = self.restricted_tournament(g, sp, p)
 
                 # Like the original NEAT algorithm, always put the most fit
                 # parent first, creating a slight fitness bias in crossover.
                 if m_fitness > p_fitness:
                     p, m = m, p
 
-        # Finalize parent selections for this individual in the next generation.
-        pop.matches[g, sp, i] = (p, m)
+            # Finalize selections for this individual in the next generation.
+            self.matches[g, sp, i] = (p, m)
 
+    @ti.kernel
+    def analyze_compatibility(self, pop: ti.template()):
+        # This function populates a compatibility matrix for each sub-population in
+        # pop, with one row and one column for each individual. Since these are
+        # symmetric matrices, we allocate one thread per unique value we need to
+        # fill (half the matrix minus the main diagonal, which is unfilled).
+        triangle_size = int(((self.num_individuals - 1) / 2) * self.num_individuals)
+        for sp, tri in ti.ndrange(self.num_sub_pops, triangle_size):
+            # Identify the row and column this thread should fill (ie, which
+            # potential parents to compute compatibility for).
+            p = tri // self.num_individuals
+            m = tri % self.num_individuals
 
-def tournament_select(pop, g, tournament_size=2, comp_threshold=3.0):
-    tournament_select_kernel(pop, g, tournament_size, comp_threshold)
+            # If this would compute a cell in the lower triangle of the matrix, use a
+            # a position on the opposite side of the upper triangle instead.
+            if p >= m:
+                p = self.num_individuals - p - 2
+                m = self.num_individuals - m - 1
+
+            # For convenience, fill both side of the matrix. We have to allocate
+            # this much space anyway, so the only thing that really matters for
+            # performance is that we avoid recomputing symmetric values. Note that
+            # the main diagonal of the matrix is not populated.
+            compatibility = pop.get_compatibility(sp, p, m)
+            self.comp_matrix[sp, p, m] = compatibility
+            self.comp_matrix[sp, m, p] = compatibility
+
+            # Sum compatibility for all pairs of individuals in this sub-population
+            # (Taichi should automatically optimize this reduction).
+            self.diversity[sp] += compatibility
+
+        # Invert the total compatibility to get diversity.
+        for sp in range(self.num_sub_pops):
+            self.diversity[sp] = 1.0 / self.diversity[sp]
