@@ -32,15 +32,15 @@ class NodeKinds(Enum):
     OUTPUT = 2
 
 
-# TODO: Would it be better to use quantized data types? Most values here only
-# use a small range, and data transfer speed over the PCI bus does seem to be a
-# limiting factor in some applications. However, activation speed is also
-# critical, so we'll want to ensure the overhead of packing / unpacking data
-# doesn't slow things down too much.
+# NOTE: For large populations, the total memory footprint for the CPPNs can
+# grow quite large, which means copying populations from the GPU can be quite
+# slow. Generally, this should be avoided when possible. It should be possible
+# to mitigate this cost by using quantized datatypes, but that would require
+# significant refactoring.
 @ti.dataclass
 class Node:
-    kind: int
-    act_func: int
+    kind: ti.uint8
+    act_func: ti.uint8
     # TODO: Does having bias and gain help?
     bias: float
     gain: float
@@ -48,22 +48,22 @@ class Node:
 
 @ti.dataclass
 class Link:
-    from_node: int
-    to_node: int
+    from_node: ti.uint8
+    to_node: ti.uint8
     weight: float
     innov: int
 
 
 CPPN_DTYPE = np.dtype([
     ('nodes', np.dtype([
-        ('kind', np.int32),
-        ('act_func', np.int32),
+        ('kind', np.uint8),
+        ('act_func', np.uint8),
         ('bias', np.float32),
         ('gain', np.float32)
     ]), MAX_NETWORK_SIZE),
     ('links', np.dtype([
-        ('from_node', np.int32),
-        ('to_node', np.int32),
+        ('from_node', np.uint8),
+        ('to_node', np.uint8),
         ('weight', np.float32),
         ('innov', np.int32)
     ]), MAX_NETWORK_SIZE)

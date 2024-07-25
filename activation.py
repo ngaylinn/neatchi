@@ -113,7 +113,9 @@ class ActivationFuncs:
 
     @ti.func
     def random(self):
-        return ti.random(dtype=int) % ti.static(ActivationFuncs.count)
+        return ti.cast(
+            ti.random(dtype=int) % ti.static(ActivationFuncs.count),
+            ti.uint8)
 
     @staticmethod
     def name(key):
