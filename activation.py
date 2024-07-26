@@ -115,7 +115,7 @@ class ActivationFuncs:
     def random(self):
         return ti.cast(
             ti.random(dtype=int) % ti.static(ActivationFuncs.count),
-            ti.uint8)
+            ti.int8)
 
     @staticmethod
     def name(key):

@@ -48,9 +48,9 @@ def add_random_link(pop, sp, i):
     from_node, to_node = 0, 0
     # Make sure from_node < to_node and disallow links from output nodes and to
     # input nodes.
-    from_node = ti.cast(rand_range(0, num_nodes - pop.num_outputs), ti.uint8)
+    from_node = ti.cast(rand_range(0, num_nodes - pop.num_outputs), ti.int8)
     to_node = ti.cast(
-        rand_range(ti.max(from_node + 1, pop.num_inputs), num_nodes), ti.uint8)
+        rand_range(ti.max(from_node + 1, pop.num_inputs), num_nodes), ti.int8)
 
     # Actually make the link, and make sure it gets an innovation number.
     pop.add_link(sp, i, Link(from_node, to_node, ti.random()))
@@ -59,7 +59,7 @@ def add_random_link(pop, sp, i):
 @ti.func
 def make_random_node(pop, node_type):
     return Node(
-        ti.cast(node_type, ti.uint8),
+        ti.cast(node_type, ti.int8),
         pop.activation_funcs.random(),
         2 * BIAS_RANGE * ti.random() - BIAS_RANGE,
         2 * GAIN_RANGE * ti.random() - GAIN_RANGE,
@@ -90,7 +90,7 @@ def add_random_node(pop, sp, i):
     n = ti.cast(rand_range(
         ti.max(old_link.from_node, pop.num_inputs - 1),
         ti.min(old_link.to_node, pop.num_nodes(sp, i) - pop.num_outputs)
-    ) + 1, ti.uint8)
+    ) + 1, ti.int8)
     pop.insert_node(sp, i, n, node)
 
     # Insert may have updated node indexes, so refresh our local copy of this

@@ -39,8 +39,8 @@ class NodeKinds(Enum):
 # significant refactoring.
 @ti.dataclass
 class Node:
-    kind: ti.uint8
-    act_func: ti.uint8
+    kind: ti.int8
+    act_func: ti.int8
     # TODO: Does having bias and gain help?
     bias: float
     gain: float
@@ -48,22 +48,22 @@ class Node:
 
 @ti.dataclass
 class Link:
-    from_node: ti.uint8
-    to_node: ti.uint8
+    from_node: ti.int8
+    to_node: ti.int8
     weight: float
     innov: int
 
 
 CPPN_DTYPE = np.dtype([
     ('nodes', np.dtype([
-        ('kind', np.uint8),
-        ('act_func', np.uint8),
+        ('kind', np.int8),
+        ('act_func', np.int8),
         ('bias', np.float32),
         ('gain', np.float32)
     ]), MAX_NETWORK_SIZE),
     ('links', np.dtype([
-        ('from_node', np.uint8),
-        ('to_node', np.uint8),
+        ('from_node', np.int8),
+        ('to_node', np.int8),
         ('weight', np.float32),
         ('innov', np.int32)
     ]), MAX_NETWORK_SIZE)
