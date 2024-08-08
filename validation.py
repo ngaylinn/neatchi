@@ -1,11 +1,12 @@
 import numpy as np
 import taichi as ti
 
+from .activation import ActivationFuncs
 from .data_types import NodeKinds, MAX_NETWORK_SIZE
 from .reproduction import BIAS_RANGE, GAIN_RANGE, WEIGHT_RANGE
 
 
-def print_cppn(pop, cppn):
+def print_cppn(cppn):
     def print_edge(num_cells, top):
         print('┏' if top else '┗', end='')
         for cell in range(num_cells):
@@ -22,7 +23,7 @@ def print_cppn(pop, cppn):
     print_body([f'{"Node " + str(n):^8}' for n in range(num_nodes)])
     print_body([f'{NodeKinds(cppn["nodes"]["kind"][n]).name:^8}'
                 for n in range(num_nodes)])
-    print_body([f'{pop.activation_funcs.name(cppn["nodes"]["act_func"][n]):^8}'
+    print_body([f'{ActivationFuncs(cppn["nodes"]["act_func"][n]).name:^8}'
                 for n in range(num_nodes)])
     print_body([f'b={cppn["nodes"]["bias"][n]:+5.3f}'
                 for n in range(num_nodes)])

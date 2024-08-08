@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 import taichi as ti
 
-from .activation import ActivationFuncs, activate
+from .activation import activate_network
 from .data_types import export_cppns, import_cppns, Link, MAX_NETWORK_SIZE, Node
 from .reproduction import mutate_all, propagate, random_init
 from .selection import get_compatibility
@@ -87,7 +87,7 @@ class CppnPopulation(Population):
     # -------------------------------------------------------------------------
 
     def __init__(self, population_shape, network_shape, index,
-                 matchmaker=None, activation_funcs=None):
+                 matchmaker=None):
         super().__init__(population_shape, index, matchmaker)
 
         self.num_inputs, self.num_outputs = network_shape
@@ -119,11 +119,6 @@ class CppnPopulation(Population):
         self.link_lens = ti.field(int,
             shape=(NUM_BUFFERS, self.num_sub_pops, self.num_individuals))
 
-        if activation_funcs is None:
-            self.activation_funcs = ActivationFuncs()
-        else:
-            self.activation_funcs = activation_funcs
-
     def to_numpy(self):
         return export_cppns(self)
 
@@ -132,7 +127,7 @@ class CppnPopulation(Population):
 
     @ti.func
     def activate(self, w, inputs):
-        return activate(self, w, inputs)
+        return activate_network(self, w, inputs)
 
     # -------------------------------------------------------------------------
     # Internal API: Node management

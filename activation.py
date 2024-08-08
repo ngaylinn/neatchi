@@ -11,163 +11,148 @@ import taichi as ti
 
 from .data_types import MAX_NETWORK_SIZE
 
+class ActivationFuncs(Enum):
+    SIGMOID = 0
+    TANH = 1
+    SIN = 2
+    GAUS = 3
+    RELU = 4
+    IDENTITY = 5
+    CLAMPED = 6
+    INV = 7
+    LOG = 8
+    EXP = 9
+    ABS = 10
+    SQUARE = 11
+    CUBE = 12
+    TRIANGLE = 13
+    SAWTOOTH = 14
+    SQR_WAVE = 15
+    NOTCH = 16
+    STEP = 17
+
+NUM_ACTIVATION_FUNCS = len(ActivationFuncs.__members__)
 
 # These functions have been tuned arbitrarily to have an "appropriate" range of
 # values when applied to values in the range from 0.0 to 1.0.
 @ti.func
-def activate_sigmoid(raw):
-    return 1.0 / (1.0 + ti.exp(8 * raw - 4))
+def activate_sigmoid(pre_activation):
+    return 1.0 / (1.0 + ti.exp(8 * pre_activation - 4))
 
 @ti.func
-def activate_tanh(raw):
-    return ti.tanh(8 * raw - 4)
+def activate_tanh(pre_activation):
+    return ti.tanh(8 * pre_activation - 4)
 
 @ti.func
-def activate_sin(raw):
-    return ti.sin(2 * raw * ti.math.pi - ti.math.pi)
+def activate_sin(pre_activation):
+    return ti.sin(2 * pre_activation * ti.math.pi - ti.math.pi)
 
 @ti.func
-def activate_gaus(raw):
-    return ti.exp(-(4 * raw - 2) ** 2)
+def activate_gaus(pre_activation):
+    return ti.exp(-(4 * pre_activation - 2) ** 2)
 
 @ti.func
-def activate_relu(raw):
-    return ti.max(0, raw)
+def activate_relu(pre_activation):
+    return ti.max(0, pre_activation)
 
 @ti.func
-def activate_identity(raw):
-    return raw
+def activate_identity(pre_activation):
+    return pre_activation
 
 @ti.func
-def activate_clamped(raw):
-    return ti.math.clamp(raw, 0.0, 1.0)
+def activate_clamped(pre_activation):
+    return ti.math.clamp(pre_activation, 0.0, 1.0)
 
 @ti.func
-def activate_inv(raw):
-    return ti.select(raw == 0, 0, 1.0 / raw)
+def activate_inv(pre_activation):
+    return ti.select(pre_activation == 0, 0, 1.0 / pre_activation)
 
 @ti.func
-def activate_log(raw):
-    return ti.log(max(1e-7, 8 * raw))
+def activate_log(pre_activation):
+    return ti.log(max(1e-7, 8 * pre_activation))
 
 @ti.func
-def activate_exp(raw):
-    return ti.exp(4 * raw - 2)
+def activate_exp(pre_activation):
+    return ti.exp(4 * pre_activation - 2)
 
 @ti.func
-def activate_abs(raw):
-    return ti.abs(raw)
+def activate_abs(pre_activation):
+    return ti.abs(pre_activation)
 
 @ti.func
-def activate_square(raw):
-    return raw ** 2
+def activate_square(pre_activation):
+    return pre_activation ** 2
 
 @ti.func
-def activate_cube(raw):
-    return raw ** 3
+def activate_cube(pre_activation):
+    return pre_activation ** 3
 
 @ti.func
-def activate_triangle(raw):
-    return 2 * ti.abs(2 * (raw - ti.floor(raw + .5))) - 1
+def activate_triangle(pre_activation):
+    return 2 * ti.abs(2 * (pre_activation - ti.floor(pre_activation + .5))) - 1
 
 @ti.func
-def activate_sawtooth(raw):
-    return 4 * ((raw) % 0.5) - 1
+def activate_sawtooth(pre_activation):
+    return 4 * ((pre_activation) % 0.5) - 1
 
 @ti.func
-def activate_sqr_wave(raw):
-    return 2 * ((raw % 1) > 0.5) - 1
+def activate_sqr_wave(pre_activation):
+    return 2 * ((pre_activation % 1) > 0.5) - 1
 
 @ti.func
-def activate_notch(raw):
-    return raw > -0.1 and raw < 0.1
+def activate_notch(pre_activation):
+    return pre_activation > -0.1 and pre_activation < 0.1
 
 @ti.func
-def activate_step(raw):
-    return raw // 1.0
+def activate_step(pre_activation):
+    return pre_activation // 1.0
 
-
-@ti.data_oriented
-class ActivationFuncs:
-    class Keys(Enum):
-        SIGMOID = 0
-        TANH = 1
-        SIN = 2
-        GAUS = 3
-        RELU = 4
-        IDENTITY = 5
-        CLAMPED = 6
-        INV = 7
-        LOG = 8
-        EXP = 9
-        ABS = 10
-        SQUARE = 11
-        CUBE = 12
-        TRIANGLE = 13
-        SAWTOOTH = 14
-        SQR_WAVE = 15
-        NOTCH = 16
-        STEP = 17
-
-    count = len(Keys.__members__)
-
-    @ti.func
-    def random(self):
-        return ti.cast(
-            ti.random(dtype=int) % ti.static(ActivationFuncs.count),
-            ti.int8)
-
-    @staticmethod
-    def name(key):
-        return ActivationFuncs.Keys(key).name
-
-    # NOTE: These inputs provided temporarily for override support in
-    # experimental code. This will likely change in the near future.
-    @ti.func
-    def call(self, inputs, w, n, key, raw):
-        value = 0.0
-        if key == ActivationFuncs.Keys.SIGMOID.value:
-            value = activate_sigmoid(raw)
-        elif key == ActivationFuncs.Keys.TANH.value:
-            value = activate_tanh(raw)
-        elif key == ActivationFuncs.Keys.SIN.value:
-            value = activate_sin(raw)
-        elif key == ActivationFuncs.Keys.GAUS.value:
-            value = activate_gaus(raw)
-        elif key == ActivationFuncs.Keys.RELU.value:
-            value = activate_relu(raw)
-        elif key == ActivationFuncs.Keys.IDENTITY.value:
-            value = activate_identity(raw)
-        elif key == ActivationFuncs.Keys.CLAMPED.value:
-            value = activate_clamped(raw)
-        elif key == ActivationFuncs.Keys.INV.value:
-            value = activate_inv(raw)
-        elif key == ActivationFuncs.Keys.LOG.value:
-            value = activate_log(raw)
-        elif key == ActivationFuncs.Keys.EXP.value:
-            value = activate_exp(raw)
-        elif key == ActivationFuncs.Keys.ABS.value:
-            value = activate_abs(raw)
-        elif key == ActivationFuncs.Keys.SQUARE.value:
-            value = activate_square(raw)
-        elif key == ActivationFuncs.Keys.CUBE.value:
-            value = activate_cube(raw)
-        elif key == ActivationFuncs.Keys.TRIANGLE.value:
-            value = activate_triangle(raw)
-        elif key == ActivationFuncs.Keys.SAWTOOTH.value:
-            value = activate_sawtooth(raw)
-        elif key == ActivationFuncs.Keys.SQR_WAVE.value:
-            value = activate_sqr_wave(raw)
-        elif key == ActivationFuncs.Keys.NOTCH.value:
-            value = activate_notch(raw)
-        elif key == ActivationFuncs.Keys.STEP.value:
-            value = activate_step(raw)
-
-        return value
+@ti.func
+def activate_node(node, raw):
+    act_func = node.act_func % NUM_ACTIVATION_FUNCS
+    pre_activation = node.gain * raw + node.bias
+    post_activation = 0.0
+    if act_func == ActivationFuncs.SIGMOID.value:
+        post_activation = activate_sigmoid(pre_activation)
+    elif act_func == ActivationFuncs.TANH.value:
+        post_activation = activate_tanh(pre_activation)
+    elif act_func == ActivationFuncs.SIN.value:
+        post_activation = activate_sin(pre_activation)
+    elif act_func == ActivationFuncs.GAUS.value:
+        post_activation = activate_gaus(pre_activation)
+    elif act_func == ActivationFuncs.RELU.value:
+        post_activation = activate_relu(pre_activation)
+    elif act_func == ActivationFuncs.IDENTITY.value:
+        post_activation = activate_identity(pre_activation)
+    elif act_func == ActivationFuncs.CLAMPED.value:
+        post_activation = activate_clamped(pre_activation)
+    elif act_func == ActivationFuncs.INV.value:
+        post_activation = activate_inv(pre_activation)
+    elif act_func == ActivationFuncs.LOG.value:
+        post_activation = activate_log(pre_activation)
+    elif act_func == ActivationFuncs.EXP.value:
+        post_activation = activate_exp(pre_activation)
+    elif act_func == ActivationFuncs.ABS.value:
+        post_activation = activate_abs(pre_activation)
+    elif act_func == ActivationFuncs.SQUARE.value:
+        post_activation = activate_square(pre_activation)
+    elif act_func == ActivationFuncs.CUBE.value:
+        post_activation = activate_cube(pre_activation)
+    elif act_func == ActivationFuncs.TRIANGLE.value:
+        post_activation = activate_triangle(pre_activation)
+    elif act_func == ActivationFuncs.SAWTOOTH.value:
+        post_activation = activate_sawtooth(pre_activation)
+    elif act_func == ActivationFuncs.SQR_WAVE.value:
+        post_activation = activate_sqr_wave(pre_activation)
+    elif act_func == ActivationFuncs.NOTCH.value:
+        post_activation = activate_notch(pre_activation)
+    elif act_func == ActivationFuncs.STEP.value:
+        post_activation = activate_step(pre_activation)
+    return post_activation
 
 
 @ti.func
-def activate(pop, w, inputs):
+def activate_network(pop, w, inputs):
     act = ti.Vector([0.0] * MAX_NETWORK_SIZE)
     sp, i = pop.index[w]
     num_nodes = pop.num_nodes(sp, i)
@@ -187,8 +172,7 @@ def activate(pop, w, inputs):
                 value = act[link.from_node]
                 raw += value * link.weight
         node = pop.get_node(sp, i, n)
-        act[n] = pop.activation_funcs.call(
-            inputs, w, n, node.act_func, (node.gain * raw + node.bias))
+        act[n] = activate_node(node, raw)
 
     # Capture the values from the CPPN's output nodes and return them.
     outputs = ti.Vector([0.0] * pop.num_outputs)
