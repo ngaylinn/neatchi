@@ -104,10 +104,12 @@ def export_cppns(pop):
     b = pop.buffer_index[None]
     nodes = pop.nodes.to_numpy()
     links = pop.links.to_numpy()
+    node_lens = pop.node_lens.to_numpy()
+    link_lens = pop.link_lens.to_numpy()
     result = np.full(pop.population_shape, EMPTY_CPPN)
     for sp, i in ti.ndrange(*pop.population_shape):
-        num_nodes = pop.node_lens[b, sp, i]
-        num_links = pop.link_lens[b, sp, i]
+        num_nodes = node_lens[b, sp, i]
+        num_links = link_lens[b, sp, i]
         for key, data in nodes.items():
             result[sp, i]['nodes'][key][:num_nodes] = \
                     data[b, sp, i, :num_nodes]
