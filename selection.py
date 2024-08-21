@@ -58,23 +58,25 @@ class Matchmaker:
         self.num_sub_pops, self.num_individuals = population_shape
         self.history_length = history_length
 
-        # Fields to track compatibility and diversity of the population.
+        # Pairwise compatibility table for all sub populations.
         self.comp_matrix = ti.field(float,
             shape=(self.num_sub_pops, self.num_individuals, self.num_individuals))
         self.comp_matrix.fill(ti.math.nan) # For the main diagonals.
-        self.diversity = ti.field(float, shape=(self.num_sub_pops))
 
-        # Keep a history of fitness scores and mate selections so that we can
+        # Keep a history of selections and metrics we want to track so we can
         # avoid copying them to the host on every iteration.
         self.fitness = ti.field(float,
             shape=(history_length, self.num_sub_pops, self.num_individuals))
         self.matches = ti.Vector.field(n=2, dtype=int,
+            shape=(history_length, self.num_sub_pops, self.num_individuals))
+        self.num_compatible = ti.field(int,
             shape=(history_length, self.num_sub_pops, self.num_individuals))
 
     def reset(self):
         # Clear history data.
         self.fitness.fill(0.0)
         self.matches.fill(NONE)
+        self.num_compatible.fill(0)
 
     @ti.func
     def unrestrited_tournament(self, g, sp):
@@ -92,15 +94,6 @@ class Matchmaker:
         return p, p_fitness
 
     @ti.func
-    def count_compatible(self, sp, p):
-        """Count how many individuals are compatible with the given parent."""
-        num_compatible_mates = 0
-        for c in range(self.num_individuals):
-            if self.comp_matrix[sp, p, c] < COMP_THRESHOLD:
-                num_compatible_mates += 1
-        return num_compatible_mates
-
-    @ti.func
     def restricted_tournament(self, g, sp, p):
         """Run a parent to pick a mate compatible with the given parent."""
         m = NONE
@@ -110,7 +103,7 @@ class Matchmaker:
         # order to randomly pick one of them. Note that we traverse the
         # compatibility matrix again in the following loop rather than caching
         # results and taking up even more GPU memory.
-        num_compatible_mates = self.count_compatible(sp, p)
+        num_compatible_mates = self.num_compatible[g, sp, p]
 
         # If there are compatible mates, hold a tournament to pick one.
         if num_compatible_mates > 0:
@@ -162,12 +155,13 @@ class Matchmaker:
             self.matches[g, sp, i] = (p, m)
 
     @ti.kernel
-    def analyze_compatibility(self, pop: ti.template()):
+    def analyze_compatibility(self, pop: ti.template(), g: int):
         # This function populates a compatibility matrix for each sub-population in
         # pop, with one row and one column for each individual. Since these are
         # symmetric matrices, we allocate one thread per unique value we need to
         # fill (half the matrix minus the main diagonal, which is unfilled).
         triangle_size = int(((self.num_individuals - 1) / 2) * self.num_individuals)
+        total_compatibility = 0.0
         for sp, tri in ti.ndrange(self.num_sub_pops, triangle_size):
             # Identify the row and column this thread should fill (ie, which
             # potential parents to compute compatibility for).
@@ -188,10 +182,8 @@ class Matchmaker:
             self.comp_matrix[sp, p, m] = compatibility
             self.comp_matrix[sp, m, p] = compatibility
 
-            # Sum compatibility for all pairs of individuals in this sub-population
-            # (Taichi should automatically optimize this reduction).
-            self.diversity[sp] += compatibility
-
-        # Invert the total compatibility to get diversity.
-        for sp in range(self.num_sub_pops):
-            self.diversity[sp] = 1.0 / self.diversity[sp]
+            # A hack to make sure we don't go out of bounds.
+            safe_g = g % self.history_length
+            # Sum up how many compatible mates there are for each individual.
+            self.num_compatible[safe_g, sp, p] += compatibility < COMP_THRESHOLD
+            self.num_compatible[safe_g, sp, m] += compatibility < COMP_THRESHOLD

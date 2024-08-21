@@ -46,13 +46,13 @@ class Population(ABC):
     def randomize(self, elites=None):
         self.matchmaker.reset()
         self.make_random_population(elites)
-        self.matchmaker.analyze_compatibility(self)
+        self.matchmaker.analyze_compatibility(self, 0)
 
     # NOTE: Value of generation must be less than history_size
     def propagate(self, generation=0):
         self.matchmaker.update_matches(generation)
         self.make_next_generation(generation)
-        self.matchmaker.analyze_compatibility(self)
+        self.matchmaker.analyze_compatibility(self, generation + 1)
 
     @abstractmethod
     def to_numpy(self):
