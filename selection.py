@@ -71,12 +71,15 @@ class Matchmaker:
             shape=(history_length, self.num_sub_pops, self.num_individuals))
         self.num_compatible = ti.field(int,
             shape=(history_length, self.num_sub_pops, self.num_individuals))
+        self.total_compatibility = ti.field(float,
+            shape=(history_length, self.num_sub_pops, self.num_individuals))
 
     def reset(self):
         # Clear history data.
         self.fitness.fill(0.0)
         self.matches.fill(NONE)
         self.num_compatible.fill(0)
+        self.total_compatibility.fill(0)
 
     @ti.func
     def unrestrited_tournament(self, g, sp):
@@ -184,6 +187,8 @@ class Matchmaker:
 
             # A hack to make sure we don't go out of bounds.
             safe_g = g % self.history_length
-            # Sum up how many compatible mates there are for each individual.
+            # Calculate per individual totals as well as the pairwise matrix.
             self.num_compatible[safe_g, sp, p] += compatibility < COMP_THRESHOLD
             self.num_compatible[safe_g, sp, m] += compatibility < COMP_THRESHOLD
+            self.total_compatibility[safe_g, sp, p] += compatibility
+            self.total_compatibility[safe_g, sp, m] += compatibility
