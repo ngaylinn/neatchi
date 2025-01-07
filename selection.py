@@ -25,7 +25,7 @@ def get_compatibility(pop, sp, p, m):
 
     # Compare the links between parent and mate to see how similar they are.
     # Note that we ignore nodes entirely, and this is probably okay. Extra
-    # nodes are only relevant if their are extra links, also. If one has fewer
+    # nodes are only relevant if there are extra links, also. If one has fewer
     # nodes (say, because of a random deletion), the associated links will also
     # have been deleted.
     # TODO: Optimize?
