@@ -15,8 +15,8 @@ import taichi as ti
 
 from .activation import activate_network
 from .data_types import export_cppns, import_cppns, Link, MAX_NETWORK_SIZE, Node
-from .reproduction import mutate_all, propagate, random_init
-from .selection import get_compatibility
+from .reproduction import MUTATION_RATE, mutate_all, propagate, random_init
+from .selection import CROSSOVER_RATE, TOURNAMENT_SIZE, get_compatibility
 from .validation import validate_all
 
 
@@ -49,9 +49,12 @@ class Population(ABC):
         self.matchmaker.analyze_compatibility(self, 0)
 
     # NOTE: Value of generation must be less than history_size
-    def propagate(self, generation=0):
-        self.matchmaker.update_matches(generation)
-        self.make_next_generation(generation)
+    def propagate(self, generation=0, mutation_rate=MUTATION_RATE,
+                  crossover_rate=CROSSOVER_RATE,
+                  tournament_size=TOURNAMENT_SIZE):
+        self.matchmaker.update_matches(
+            generation, crossover_rate, tournament_size)
+        self.make_next_generation(generation, mutation_rate)
         self.matchmaker.analyze_compatibility(self, generation + 1)
 
     @abstractmethod
@@ -71,7 +74,7 @@ class Population(ABC):
         ...
 
     @abstractmethod
-    def make_next_generation(self, generation):
+    def make_next_generation(self, generation, mutation_rate):
         ...
 
     @abstractmethod
@@ -313,7 +316,7 @@ class CppnPopulation(Population):
         # For debugging, make sure all the new CPPNs are valid.
         # validate_all(self)
 
-    def make_next_generation(self, generation=0):
+    def make_next_generation(self, generation=0, mutation_rate=MUTATION_RATE):
         # Fill the unused population buffer with a new generation drawn from
         # the current population buffer, possibly with crossover.
         propagate(self, generation)
@@ -322,7 +325,7 @@ class CppnPopulation(Population):
         # generation. This is done after the propagate step so that the code
         # for mutation doesn't need to be aware of what buffer index to use.
         self.rotate_buffer()
-        mutate_all(self)
+        mutate_all(self, mutation_rate)
 
         # For debugging, make sure all the new CPPNs are valid.
         # validate_all(self)

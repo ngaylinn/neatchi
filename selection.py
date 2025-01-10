@@ -61,7 +61,7 @@ class Matchmaker:
         # Pairwise compatibility table for all sub populations.
         self.comp_matrix = ti.field(float,
             shape=(self.num_sub_pops, self.num_individuals, self.num_individuals))
-        self.comp_matrix.fill(ti.math.nan) # For the main diagonals.
+        self.comp_matrix.fill(ti.math.nan)  # For the main diagonals.
 
         # Keep a history of selections and metrics we want to track so we can
         # avoid copying them to the host on every iteration.
@@ -82,13 +82,13 @@ class Matchmaker:
         self.total_compatibility.fill(0)
 
     @ti.func
-    def unrestrited_tournament(self, g, sp):
+    def unrestrited_tournament(self, g, sp, tournament_size):
         """Run a tournament to pick a parent from a given sub-population."""
         p = NONE
         p_fitness = -ti.math.inf
 
         # Look at TOURNAMENT_SIZE random individuals and return the most fit.
-        for _ in range(TOURNAMENT_SIZE):
+        for _ in range(tournament_size):
             c = rand_range(0, self.num_individuals)
             c_fitness = self.fitness[g, sp, c]
             if c_fitness > p_fitness:
@@ -97,7 +97,7 @@ class Matchmaker:
         return p, p_fitness
 
     @ti.func
-    def restricted_tournament(self, g, sp, p):
+    def restricted_tournament(self, g, sp, p, tournament_size):
         """Run a parent to pick a mate compatible with the given parent."""
         m = NONE
         m_fitness = -ti.math.inf
@@ -110,7 +110,7 @@ class Matchmaker:
 
         # If there are compatible mates, hold a tournament to pick one.
         if num_compatible_mates > 0:
-            for _ in range(TOURNAMENT_SIZE):
+            for _ in range(tournament_size):
                 # Pick one of the compatible mates at random. Note, this is not
                 # an array index, it's the number of valid mates to skip before
                 # we get to our selected candidate.
@@ -135,19 +135,21 @@ class Matchmaker:
         return m, m_fitness
 
     @ti.kernel
-    def update_matches(self, g: int):
+    def update_matches(self, g: int, crossover_rate: float,
+                       tournament_size: int):
         """Perform selection for all individuals in all sub-populations."""
         for sp, i in ti.ndrange(*self.population_shape):
             # Hold a tournament to randomly pick a parent for this individual.
-            p, p_fitness = self.unrestrited_tournament(g, sp)
+            p, p_fitness = self.unrestrited_tournament(g, sp, tournament_size)
 
-            # Randomly decide whether to attempt crossover at all or if this parent
-            # will simply clone itself.
+            # Randomly decide whether to attempt crossover at all or if this
+            # parent will simply clone itself.
             m = NONE
-            if ti.random() < CROSSOVER_RATE:
+            if ti.random() < crossover_rate:
                 # Hold a tournament among all the mates compatible with parent
                 # to pick one.
-                m, m_fitness = self.restricted_tournament(g, sp, p)
+                m, m_fitness = self.restricted_tournament(
+                    g, sp, p, tournament_size)
 
                 # Like the original NEAT algorithm, always put the most fit
                 # parent first, creating a slight fitness bias in crossover.
@@ -159,28 +161,31 @@ class Matchmaker:
 
     @ti.kernel
     def analyze_compatibility(self, pop: ti.template(), g: int):
-        # This function populates a compatibility matrix for each sub-population in
-        # pop, with one row and one column for each individual. Since these are
-        # symmetric matrices, we allocate one thread per unique value we need to
-        # fill (half the matrix minus the main diagonal, which is unfilled).
-        triangle_size = int(((self.num_individuals - 1) / 2) * self.num_individuals)
-        total_compatibility = 0.0
+        # This function populates a compatibility matrix for each
+        # sub-population in pop, with one row and one column for each
+        # individual. Since these are symmetric matrices, we allocate one
+        # thread per unique value we need to fill (half the matrix minus the
+        # main diagonal, which is unfilled).
+        triangle_size = int(
+            ((self.num_individuals - 1) / 2) * self.num_individuals)
         for sp, tri in ti.ndrange(self.num_sub_pops, triangle_size):
             # Identify the row and column this thread should fill (ie, which
             # potential parents to compute compatibility for).
             p = tri // self.num_individuals
             m = tri % self.num_individuals
 
-            # If this would compute a cell in the lower triangle of the matrix, use a
-            # a position on the opposite side of the upper triangle instead.
+            # If this would compute a cell in the lower triangle of the matrix,
+            # use a a position on the opposite side of the upper triangle
+            # instead.
             if p >= m:
                 p = self.num_individuals - p - 2
                 m = self.num_individuals - m - 1
 
-            # For convenience, fill both side of the matrix. We have to allocate
-            # this much space anyway, so the only thing that really matters for
-            # performance is that we avoid recomputing symmetric values. Note that
-            # the main diagonal of the matrix is not populated.
+            # For convenience, fill both side of the matrix. We have to
+            # allocate this much space anyway, so the only thing that really
+            # matters for performance is that we avoid recomputing symmetric
+            # values. Note that the main diagonal of the matrix is not
+            # populated.
             compatibility = pop.get_compatibility(sp, p, m)
             self.comp_matrix[sp, p, m] = compatibility
             self.comp_matrix[sp, m, p] = compatibility

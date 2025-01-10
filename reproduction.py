@@ -266,10 +266,17 @@ def propagate(pop: ti.template(), g: int):
 
 
 @ti.kernel
-def mutate_all(pop: ti.template()):
+def mutate_all(pop: ti.template(), mutation_rate: float):
     for sp, i in ti.ndrange(*pop.population_shape):
-        if ti.random() < MUTATION_RATE:
-            mutate_one(pop, sp, i)
+        # Do a number of mutations proportional to the size of the CPPN.
+        # Without this, the chance that an individual node or link will be
+        # mutated goes down as the CPPN evolves more complexity, which is
+        # undesirable. Note, this likely increases thread divergence and
+        # therefore hurts performance.
+        network_size = pop.num_nodes(sp, i) + pop.num_links(sp, i)
+        for _ in range(network_size):
+            if ti.random() < mutation_rate:
+                mutate_one(pop, sp, i)
 
 
 @ti.kernel
@@ -281,7 +288,13 @@ def random_init(pop: ti.template()):
             pop.insert_node(sp, i, n, make_random_node(NodeKinds.INPUT.value))
         for n in range(pop.num_inputs, pop.num_inputs + pop.num_outputs):
             pop.insert_node(sp, i, n, make_random_node(NodeKinds.OUTPUT.value))
+
         # Add a randomized number of mutations to make the initial population
-        # somewhat diverse.
-        for _ in range(rand_range(1, MAX_INITIAL_MUTATIONS + 1)):
+        # somewhat diverse. The number of mutations is proportional to the
+        # initial network size, so that big networks are as randomized as small
+        # ones.
+        network_size = pop.num_inputs + pop.num_outputs
+        min_mutations = network_size
+        max_mutations = network_size * MAX_INITIAL_MUTATIONS + 1
+        for _ in range(rand_range(min_mutations, max_mutations)):
             mutate_one(pop, sp, i)

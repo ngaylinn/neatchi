@@ -19,11 +19,11 @@ import taichi as ti
 # evolved. It also affects memory and performance in two key ways. First, this
 # determines the overall size of the CPPNs, since we always allocate enough
 # space for this many nodes and links. This affects the time it takes to
-# transmit CPPNs from GPU to CPU and back. Also, the Actuator class takes
-# advantage of this value being small to hold the entire activation buffer in
-# thread-local memory. This is a big performance boost, but won't work if this
-# number gets much bigger. We'd have to switch to a field instead.
-MAX_NETWORK_SIZE = 20
+# transmit CPPNs from GPU to CPU and back. Also, the activate_network function
+# takes advantage of this value being small to hold the entire activation
+# buffer in thread-local memory. This is a big performance boost, but won't
+# work if this number gets much bigger. We'd have to switch to a field instead.
+MAX_NETWORK_SIZE = 30
 
 
 class NodeKinds(Enum):
